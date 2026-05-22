@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
-"""Test: split card — header top, body bottom with mask reveal."""
+"""
+Preview script — tweak the settings block at the top, then run:
+
+    python test_transition.py
+
+and open test_transition.mp4.
+"""
 
 import os
 import numpy as np
-from moviepy import AudioFileClip, CompositeAudioClip, CompositeVideoClip, ColorClip, VideoClip
+from moviepy import ColorClip, CompositeVideoClip, ImageClip, VideoClip, AudioFileClip, CompositeAudioClip
 from PIL import Image, ImageDraw, ImageFont
-from utils.card import render_post_card
+from utils.card import render_card
+
+# ── Settings ─────────────────────────────────────────────────────────────────
+CARD_STYLE            = "reddit"   # "custom" | "reddit"
+BODY_STYLE            = "karaoke"  # "card"   | "karaoke"
+DISMISS_TITLE_ON_BODY = True       # fade header out when body starts
+WORDS_PER_CHUNK       = 3          # karaoke only: how many words per flash (0 = full line)
+# ─────────────────────────────────────────────────────────────────────────────
 
 W, H = 1080, 1920
-POP_SFX = "assets/sfx/pop.wav"
+
+FONT_BOLD   = os.path.join("fonts", "Montserrat-ExtraBold.ttf")
+FONT_NORMAL = os.path.join("fonts", "Roboto-Regular.ttf")
 
 POST_TEXT = (
     "Today, I was getting sick of listening to the guy in the next "
@@ -18,176 +33,270 @@ POST_TEXT = (
 )
 TITLE = "TIFU by sending an anonymous email to my coworker"
 
-os.makedirs("assets/temp/test_card", exist_ok=True)
-header_path, body_pages = render_post_card(
-    POST_TEXT, "assets/temp/test_card/card.png",
-    title=TITLE, author="throwaway_cubicle", source="reddit",
-    avatar_url="https://styles.redditmedia.com/t5_3k30p/styles/profileIcon_uj015iwx9s7g1.png?width=256&height=256",
-)
+# ── Step 1: split the full text into N-word chunks ───────────────────────────
+# This is completely independent of how card.py wraps text.
+all_words = POST_TEXT.split()
+chunk_size = WORDS_PER_CHUNK if BODY_STYLE == "karaoke" and WORDS_PER_CHUNK > 0 else len(all_words)
+chunks = [
+    " ".join(all_words[i : i + chunk_size])
+    for i in range(0, len(all_words), chunk_size)
+]
+print(f"Chunks ({len(chunks)} total, {chunk_size} words each):")
+for i, c in enumerate(chunks):
+    print(f"  {i}: {repr(c)}")
 
-header_img = np.array(Image.open(header_path).convert("RGBA"))
-# Use first body page for the test
-body_path, line_positions = body_pages[0]
-body_img = np.array(Image.open(body_path).convert("RGBA"))
-body_h_px, body_w_px = body_img.shape[:2]
-
-print(f"Header: {header_img.shape[1]}x{header_img.shape[0]}")
-print(f"Body: {body_w_px}x{body_h_px}, {len(line_positions)} lines")
-for i, lp in enumerate(line_positions):
-    print(f"  {i}: y={lp['y_top']}-{lp['y_bottom']}  {lp['text'][:50]}")
-
-# Simulated word timestamps
-words = POST_TEXT.split()
+# ── Step 2: assign a start/end time to each chunk ────────────────────────────
+# Simulate TTS at a fixed rate — no real audio needed for preview.
 WORDS_PER_SEC = 3.0
-word_timestamps = []
-t = 0.0
-for w in words:
-    dur = 1.0 / WORDS_PER_SEC
-    word_timestamps.append({"word": w, "start": t, "end": t + dur})
-    t += dur
+word_dur = 1.0 / WORDS_PER_SEC
 
-line_timings = []
-word_idx = 0
-for lp in line_positions:
-    lw = lp["text"].split()
-    n = min(len(lw), len(word_timestamps) - word_idx)
-    if n <= 0:
-        break
-    s = word_timestamps[word_idx]["start"]
-    e = word_timestamps[word_idx + n - 1]["end"]
-    line_timings.append({"y_top": lp["y_top"], "y_bottom": lp["y_bottom"], "start": s, "end": e})
-    word_idx += n
+chunk_timings = []  # list of {"text", "start", "end"}
+t = 0.0
+for chunk in chunks:
+    n = len(chunk.split())
+    chunk_timings.append({"text": chunk, "start": t, "end": t + n * word_dur})
+    t += n * word_dur
 
 TITLE_DUR = 3.0
-CONTENT_DUR = word_timestamps[-1]["end"] + 1.0
+CONTENT_DUR = t
 TOTAL_DUR = TITLE_DUR + CONTENT_DUR
 
-DISPLAY_W = int(W * 0.85)
-h_scale = DISPLAY_W / header_img.shape[1]
-b_scale = DISPLAY_W / body_w_px
+print(f"\nTotal duration: {TOTAL_DUR:.1f}s  (title={TITLE_DUR}s + body={CONTENT_DUR:.1f}s)")
+
+# ── Step 3: render the header card ───────────────────────────────────────────
+os.makedirs("assets/temp/test_card", exist_ok=True)
+header_path, _body_pages = render_card(
+    style=CARD_STYLE,
+    text=POST_TEXT,
+    output_path="assets/temp/test_card/card.png",
+    title=TITLE,
+    author="throwaway_cubicle",
+    avatar_url="https://styles.redditmedia.com/t5_3k30p/styles/profileIcon_uj015iwx9s7g1.png?width=256&height=256",
+    subreddit="tifu",
+    upvotes=42300,
+    num_comments=1847,
+)
+header_img = np.array(Image.open(header_path).convert("RGBA"))
+
+# ── Step 4: pre-render one caption image per chunk ───────────────────────────
+FONT_SIZE    = 100
+STROKE_W     = 12
+TEXT_COLOR   = "white"
+STROKE_COLOR = "black"
+PAD          = 24
+MAX_TEXT_W   = W - PAD * 4   # max text width before wrapping
+
+def render_caption(text: str) -> np.ndarray:
+    """Render text as a centred white-on-black-stroke caption image (RGBA)."""
+    font = ImageFont.truetype(FONT_BOLD, FONT_SIZE)
+    dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+
+    # Word-wrap at MAX_TEXT_W
+    lines, current = [], ""
+    for word in text.split():
+        candidate = (current + " " + word).strip()
+        bb = dummy_draw.textbbox((0, 0), candidate, font=font)
+        if bb[2] - bb[0] <= MAX_TEXT_W:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    if not lines:
+        lines = [" "]
+
+    LINE_GAP = 10
+    bbs = [dummy_draw.textbbox((0, 0), l, font=font) for l in lines]
+    widths  = [b[2] - b[0] for b in bbs]
+    heights = [b[3] - b[1] for b in bbs]
+
+    img_w = max(widths)  + PAD * 2 + STROKE_W * 2
+    img_h = sum(heights) + LINE_GAP * (len(lines) - 1) + PAD * 2 + STROKE_W * 2
+    img = Image.new("RGBA", (int(img_w), int(img_h)), (0, 0, 0, 0))
+    d   = ImageDraw.Draw(img)
+
+    y = PAD + STROKE_W
+    for line, bb, w in zip(lines, bbs, widths):
+        x = (img_w - w) / 2 - bb[0]
+        d.text((x, y - bb[1]), line, font=font,
+               fill=STROKE_COLOR, stroke_width=STROKE_W, stroke_fill=STROKE_COLOR)
+        d.text((x, y - bb[1]), line, font=font, fill=TEXT_COLOR)
+        y += bb[3] - bb[1] + LINE_GAP
+
+    return np.array(img)
+
+caption_imgs = [render_caption(ct["text"]) for ct in chunk_timings]
+
+# ── Step 5: layout constants ──────────────────────────────────────────────────
+DISPLAY_W     = int(W * 0.85)
+h_scale       = DISPLAY_W / header_img.shape[1]
 HEADER_DISP_H = int(header_img.shape[0] * h_scale)
-BODY_DISP_H = int(body_h_px * b_scale)
-
-HEADER_Y_START = int(H * 0.12)
-HEADER_Y_END = int(H * 0.08)
-BODY_Y = int(H * 0.55)
-SCROLL_TIME = 0.3
-BODY_MASK_START = line_positions[0]["y_top"] if line_positions else body_h_px
-
-# Pop-in scale for header
-POP_DUR = 0.25
-ZOOM_AMT = 0.10
+HEADER_Y      = int(H * 0.10)   # resting position of header top edge
+CAPTION_CY    = int(H * 0.60)   # vertical centre of caption text
+POP_DUR       = 0.25            # header pop-in duration
+DISMISS_DUR   = 0.35            # header fade-out duration
+FADE_OUT_DUR  = 0.12            # caption fade-out before next chunk
 
 
-def get_body_mask_bottom(t):
-    bottom = BODY_MASK_START
-    for lt in line_timings:
-        if t >= lt["start"]:
-            elapsed = t - lt["start"]
-            progress = min(1.0, elapsed / SCROLL_TIME)
-            eased = 1 - (1 - progress) ** 3
-            lb = lt["y_top"] + (lt["y_bottom"] - lt["y_top"]) * eased
-            bottom = max(bottom, int(lb))
-    return min(bottom, body_h_px)
-
-
-def get_header_scale(t):
-    if t < POP_DUR:
-        progress = t / POP_DUR
-        eased = 1 - (1 - progress) ** 4
-        return 0.8 + 0.2 * eased
-    zoom_progress = (t - POP_DUR) / max(0.01, TOTAL_DUR - POP_DUR)
-    return 1.0 + ZOOM_AMT * zoom_progress
+def _composite(frame, img_arr, dst_x, dst_y):
+    """Alpha-composite img_arr (RGBA numpy) onto frame (RGB numpy) at (dst_x, dst_y)."""
+    ih, iw = img_arr.shape[:2]
+    # Clamp to frame bounds
+    sx = max(0, -dst_x);  dx = max(0, dst_x)
+    sy = max(0, -dst_y);  dy = max(0, dst_y)
+    pw = min(iw - sx, W - dx)
+    ph = min(ih - sy, H - dy)
+    if pw <= 0 or ph <= 0:
+        return
+    alpha = img_arr[sy:sy+ph, sx:sx+pw, 3:4].astype(np.float32) / 255.0
+    src   = img_arr[sy:sy+ph, sx:sx+pw, :3].astype(np.float32)
+    dst   = frame[dy:dy+ph, dx:dx+pw].astype(np.float32)
+    frame[dy:dy+ph, dx:dx+pw] = (src * alpha + dst * (1 - alpha)).astype(np.uint8)
 
 
 def make_frame(t):
-    frame = np.full((H, W, 3), 50, dtype=np.uint8)
+    frame = np.full((H, W, 3), 40, dtype=np.uint8)
 
-    # Header with pop-in + slow drift up
-    scale = get_header_scale(t)
-    cur_w = int(DISPLAY_W * scale)
-    cur_h = int(HEADER_DISP_H * scale)
-    h_pil = Image.fromarray(header_img).resize((cur_w, cur_h), Image.LANCZOS)
-    h_arr = np.array(h_pil)
-
-    # Center horizontally
-    x = (W - cur_w) // 2
-    # Drift upward
-    slide_progress = min(1.0, t / TOTAL_DUR)
-    base_y = int(HEADER_Y_START + (HEADER_Y_END - HEADER_Y_START) * slide_progress)
-    # Pin center so pop grows from center
-    base_center_y = base_y + HEADER_DISP_H // 2
-    y_off = base_center_y - cur_h // 2
-
-    a = h_arr[:, :, 3:4].astype(np.float32) / 255.0
-    ph = min(cur_h, H - max(0, y_off))
-    pw = min(cur_w, W - max(0, x))
-    if y_off < 0:
-        src_y = -y_off
-        dst_y = 0
-        ph = min(cur_h - src_y, H)
+    # ── Header ────────────────────────────────────────────────────────────────
+    # Pop-in: scale 80%→100% over POP_DUR
+    if t < POP_DUR:
+        s = 0.8 + 0.2 * (1 - (1 - t / POP_DUR) ** 4)
     else:
-        src_y = 0
-        dst_y = y_off
-    if x < 0:
-        src_x = -x
-        dst_x = 0
-        pw = min(cur_w - src_x, W)
+        s = 1.0
+
+    # Dismiss: fade out over DISMISS_DUR once body starts
+    if DISMISS_TITLE_ON_BODY and t >= TITLE_DUR:
+        elapsed = t - TITLE_DUR
+        h_alpha = max(0.0, 1.0 - elapsed / DISMISS_DUR)
     else:
-        src_x = 0
-        dst_x = x
+        h_alpha = 1.0
 
-    if ph > 0 and pw > 0:
-        bg = frame[dst_y:dst_y+ph, dst_x:dst_x+pw].astype(np.float32)
-        rgb = h_arr[src_y:src_y+ph, src_x:src_x+pw, :3].astype(np.float32)
-        al = a[src_y:src_y+ph, src_x:src_x+pw]
-        frame[dst_y:dst_y+ph, dst_x:dst_x+pw] = (rgb * al + bg * (1 - al)).astype(np.uint8)
+    if h_alpha > 0:
+        cw = max(1, int(DISPLAY_W * s))
+        ch = max(1, int(HEADER_DISP_H * s))
+        h_pil = Image.fromarray(header_img).resize((cw, ch), Image.LANCZOS)
+        h_arr = np.array(h_pil)
+        # Apply dismiss alpha
+        if h_alpha < 1.0:
+            h_arr = h_arr.copy()
+            h_arr[:, :, 3] = (h_arr[:, :, 3].astype(np.float32) * h_alpha).astype(np.uint8)
+        hx = (W - cw) // 2
+        hy = HEADER_Y - (ch - HEADER_DISP_H) // 2   # grow from centre
+        _composite(frame, h_arr, hx, hy)
 
-    # Body (mask reveal) — completely invisible until text starts
+    # ── Body ──────────────────────────────────────────────────────────────────
     if t >= TITLE_DUR:
-        mb = get_body_mask_bottom(t - TITLE_DUR)
-        # Only show if we've revealed past the initial mask start
-        if mb > BODY_MASK_START:
-            masked = body_img.copy()
-            masked[mb:, :, 3] = 0
-            b_pil = Image.fromarray(masked).resize((DISPLAY_W, BODY_DISP_H), Image.LANCZOS)
-            b_arr = np.array(b_pil)
-            bx = (W - DISPLAY_W) // 2
-            a2 = b_arr[:, :, 3:4].astype(np.float32) / 255.0
-            ph2 = min(BODY_DISP_H, H - BODY_Y)
-            bg2 = frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W].astype(np.float32)
-            frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W] = (b_arr[:ph2, :, :3].astype(np.float32) * a2[:ph2] + bg2 * (1 - a2[:ph2])).astype(np.uint8)
+        tb = t - TITLE_DUR   # time within body section
+
+        if BODY_STYLE == "karaoke":
+            # Find the active chunk
+            active = None
+            for i, ct in enumerate(chunk_timings):
+                if tb >= ct["start"]:
+                    active = i
+            if active is not None:
+                ct    = chunk_timings[active]
+                c_arr = caption_imgs[active].copy()
+
+                # Pop-in from chunk start
+                elapsed = tb - ct["start"]
+                if elapsed < POP_DUR:
+                    s2 = 0.8 + 0.2 * (1 - (1 - elapsed / POP_DUR) ** 4)
+                    nw = max(1, int(c_arr.shape[1] * s2))
+                    nh = max(1, int(c_arr.shape[0] * s2))
+                    c_arr = np.array(Image.fromarray(c_arr).resize((nw, nh), Image.LANCZOS))
+
+                # Fade out before next chunk
+                if active + 1 < len(chunk_timings):
+                    time_left = chunk_timings[active + 1]["start"] - tb
+                else:
+                    time_left = ct["end"] - tb
+                if 0 <= time_left < FADE_OUT_DUR:
+                    c_arr = c_arr.copy()
+                    c_arr[:, :, 3] = (c_arr[:, :, 3] * (time_left / FADE_OUT_DUR)).astype(np.uint8)
+
+                ch2, cw2 = c_arr.shape[:2]
+                cx = (W - cw2) // 2
+                cy = CAPTION_CY - ch2 // 2
+                _composite(frame, c_arr, cx, cy)
+
+        else:  # "card" — use the body pages from render_card
+            # Load body pages lazily (only in card mode)
+            if not hasattr(make_frame, "_body_imgs"):
+                make_frame._body_imgs = []
+                make_frame._body_lts  = []
+                wi = 0
+                for bp_path, bp_positions in _body_pages:
+                    make_frame._body_imgs.append(
+                        np.array(Image.open(bp_path).convert("RGBA"))
+                    )
+                    for lp in bp_positions:
+                        n = len(lp["text"].split())
+                        s_t = chunk_timings[wi]["start"] if wi < len(chunk_timings) else CONTENT_DUR
+                        e_t = chunk_timings[min(wi + n - 1, len(chunk_timings)-1)]["end"]
+                        make_frame._body_lts.append({**lp, "start": s_t, "end": e_t, "page": len(make_frame._body_imgs)-1})
+                        wi += 1
+
+            # Find active page by which lines have started
+            active_page = 0
+            for lt in make_frame._body_lts:
+                if tb >= lt["start"]:
+                    active_page = lt["page"]
+
+            page_lts = [lt for lt in make_frame._body_lts if lt["page"] == active_page]
+            bp_img   = make_frame._body_imgs[active_page]
+            ph_img   = bp_img.shape[0]
+
+            mask_top = page_lts[0]["y_top"] if page_lts else 0
+            bottom   = mask_top
+            for lt in page_lts:
+                if tb >= lt["start"]:
+                    prog  = min(1.0, (tb - lt["start"]) / 0.3)
+                    eased = 1 - (1 - prog) ** 3
+                    bottom = max(bottom, int(lt["y_top"] + (lt["y_bottom"] - lt["y_top"]) * eased))
+
+            if bottom > mask_top:
+                masked = bp_img.copy()
+                masked[bottom:, :, 3] = 0
+                bh, bw = masked.shape[:2]
+                dh = int(bh * DISPLAY_W / bw)
+                b_pil = Image.fromarray(masked).resize((DISPLAY_W, dh), Image.LANCZOS)
+                bx = (W - DISPLAY_W) // 2
+                by = int(H * 0.55)
+                _composite(frame, np.array(b_pil), bx, by)
 
     return frame
 
 
-video = VideoClip(make_frame, duration=TOTAL_DUR).with_fps(30)
-
-# Watermark
-from moviepy import ImageClip
-watermark_font = ImageFont.truetype(os.path.join("fonts", "Roboto-Regular.ttf"), 44)
+# ── Watermark ─────────────────────────────────────────────────────────────────
+wm_font = ImageFont.truetype(FONT_NORMAL, 44)
 wm_text = "Gameplay from Dino Duel"
-wm_bbox = watermark_font.getbbox(wm_text)
-wm_w = wm_bbox[2] - wm_bbox[0] + 20
-wm_h = wm_bbox[3] - wm_bbox[1] + 14
-wm_img = Image.new("RGBA", (wm_w, wm_h), (0, 0, 0, 0))
-ImageDraw.Draw(wm_img).text((10, 5), wm_text, font=watermark_font, fill=(255, 255, 255, 255))
-wm_arr = np.array(wm_img)
+wm_bb   = wm_font.getbbox(wm_text)
+wm_w    = wm_bb[2] - wm_bb[0] + 20
+wm_h    = wm_bb[3] - wm_bb[1] + 14
+wm_img  = Image.new("RGBA", (wm_w, wm_h), (0, 0, 0, 0))
+ImageDraw.Draw(wm_img).text((10, 5), wm_text, font=wm_font, fill=(255, 255, 255, 255))
+
+# ── Assemble ──────────────────────────────────────────────────────────────────
+bg        = ColorClip((W, H), color=(40, 40, 40), duration=TOTAL_DUR)
+video     = VideoClip(make_frame, duration=TOTAL_DUR).with_fps(30)
 watermark = (
-    ImageClip(wm_arr, duration=TOTAL_DUR)
+    ImageClip(np.array(wm_img), duration=TOTAL_DUR)
     .with_opacity(0.3)
     .with_position(("center", H - wm_h - 30))
 )
-
-bg = ColorClip(size=(W, H), color=(50, 50, 50), duration=TOTAL_DUR)
 final = CompositeVideoClip([bg, video, watermark], size=(W, H)).with_duration(TOTAL_DUR)
 
-pop_sfx = AudioFileClip(POP_SFX).with_start(0).with_volume_scaled(0.25)
-final = final.with_audio(CompositeAudioClip([pop_sfx]))
+pop_sfx_path = "assets/sfx/pop.wav"
+if os.path.exists(pop_sfx_path):
+    pop = AudioFileClip(pop_sfx_path).with_start(0).with_volume_scaled(0.25)
+    final = final.with_audio(CompositeAudioClip([pop]))
 
-print(f"\nRendering {TOTAL_DUR:.1f}s test_transition.mp4 ...")
-final.write_videofile(
-    "test_transition.mp4", fps=30, codec="libx264",
-    audio_codec="aac", preset="ultrafast", logger="bar",
-)
-print("Done! Open test_transition.mp4 to preview.")
+out = "test_transition.mp4"
+print(f"\nRendering → {out}")
+print(f"  CARD_STYLE={CARD_STYLE!r}  BODY_STYLE={BODY_STYLE!r}")
+print(f"  DISMISS_TITLE_ON_BODY={DISMISS_TITLE_ON_BODY}  WORDS_PER_CHUNK={WORDS_PER_CHUNK}")
+final.write_videofile(out, fps=30, codec="libx264", audio_codec="aac", preset="ultrafast", logger="bar")
+print(f"\nDone — open {out}")

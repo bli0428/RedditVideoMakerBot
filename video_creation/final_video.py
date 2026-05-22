@@ -232,6 +232,66 @@ def _render_caption_image(text: str, max_width: int, W: int) -> str:
     return img
 
 
+def _render_karaoke_line(text: str) -> Image.Image:
+    """Render a single body chunk as a large bold pop-up text image (RGBA).
+
+    Styled identically to captions: white fill, thick black stroke, centred.
+    Text is word-wrapped if it would exceed the screen width at the caption
+    font size, so long full-line chunks never overflow off-screen.
+    """
+    text = _strip_emojis(text).strip()
+    if not text:
+        text = " "
+
+    font     = ImageFont.truetype(CAPTION_FONT, CAPTION_FONT_SIZE)
+    stroke   = CAPTION_STROKE_WIDTH
+    pad      = 20
+    # Leave generous side margins so text never touches the screen edge
+    max_text_w = 1080 - pad * 4
+
+    dummy = Image.new("RGBA", (1, 1))
+    draw  = ImageDraw.Draw(dummy)
+
+    # Word-wrap at the caption font size
+    words_in = text.split()
+    wrapped_lines: list = []
+    current = ""
+    for word in words_in:
+        candidate = (current + " " + word).strip()
+        bb = draw.textbbox((0, 0), candidate, font=font)
+        if bb[2] - bb[0] <= max_text_w:
+            current = candidate
+        else:
+            if current:
+                wrapped_lines.append(current)
+            current = word
+    if current:
+        wrapped_lines.append(current)
+    if not wrapped_lines:
+        wrapped_lines = [" "]
+
+    line_spacing = 8
+    line_bbs     = [draw.textbbox((0, 0), l, font=font) for l in wrapped_lines]
+    line_widths  = [bb[2] - bb[0] for bb in line_bbs]
+    line_heights = [bb[3] - bb[1] for bb in line_bbs]
+
+    img_w = max(line_widths) + pad * 2 + stroke * 2
+    img_h = sum(line_heights) + line_spacing * (len(wrapped_lines) - 1) + pad * 2 + stroke * 2
+    img   = Image.new("RGBA", (int(img_w), int(img_h)), (0, 0, 0, 0))
+    d     = ImageDraw.Draw(img)
+
+    y = pad + stroke
+    for line, bb in zip(wrapped_lines, line_bbs):
+        lw = bb[2] - bb[0]
+        x  = (img_w - lw) / 2 - bb[0]
+        d.text((x, y - bb[1]), line, font=font, fill=CAPTION_STROKE_COLOR,
+               stroke_width=stroke, stroke_fill=CAPTION_STROKE_COLOR)
+        d.text((x, y - bb[1]), line, font=font, fill=CAPTION_COLOR)
+        y += bb[3] - bb[1] + line_spacing
+
+    return img
+
+
 # ── Main video assembly ──────────────────────────────────────────────────────
 
 def make_final_video(
@@ -314,7 +374,7 @@ def make_final_video(
     console.log(f"[bold green] Video will be: {int(total_duration)} seconds long")
 
     # ── 4. Render split post cards (header top, body bottom) ────────────
-    from utils.card import render_post_card
+    from utils.card import render_card
     import random
 
     Path(f"assets/temp/{reddit_id}/png").mkdir(parents=True, exist_ok=True)
@@ -332,13 +392,24 @@ def make_final_video(
     post_text = _strip_emojis(post_text)
     author = reddit_obj.get("author", "Anonymous")
     subreddit = settings.config["reddit"]["thread"].get("subreddit", "")
+    card_style = settings.config["settings"].get("card_style", "custom")
+    body_style = settings.config["settings"].get("body_style", "card")
+    dismiss_title_on_body   = settings.config["settings"].get("dismiss_title_on_body", False)
+    karaoke_words_per_chunk = int(settings.config["settings"].get("karaoke_words_per_chunk", 0))
+    theme = settings.config["settings"].get("theme", "light")
 
     card_path = f"assets/temp/{reddit_id}/png/card.png"
-    header_path, body_pages = render_post_card(
-        post_text, card_path,
+    header_path, body_pages = render_card(
+        style=card_style,
+        text=post_text,
+        output_path=card_path,
         title=_strip_emojis(reddit_obj.get("thread_title", "")),
-        author=author, avatar_url=reddit_obj.get("avatar_url", ""),
-        source="reddit", subreddit=subreddit,
+        author=author,
+        avatar_url=reddit_obj.get("avatar_url", ""),
+        subreddit=subreddit,
+        upvotes=reddit_obj.get("thread_score", 0),
+        num_comments=reddit_obj.get("num_comments", 0),
+        theme="dark" if theme in ("dark", "transparent") else "light",
     )
 
     header_img = np.array(Image.open(header_path).convert("RGBA"))
@@ -369,6 +440,11 @@ def make_final_video(
                 })
         time_offset += content_durations[idx_ap]
 
+    # Build per-line timings from word timestamps.
+    # When karaoke_words_per_chunk > 0 each line is further split into N-word
+    # chunks so the karaoke display advances more frequently.
+    _chunk_size = karaoke_words_per_chunk if body_style == "karaoke" and karaoke_words_per_chunk > 0 else 0
+
     line_timings = []
     word_idx = 0
     for lp in line_positions:
@@ -378,12 +454,37 @@ def make_final_video(
             n = max(0, len(all_word_timestamps) - word_idx)
         if n <= 0:
             prev_end = line_timings[-1]["end"] if line_timings else 0
-            line_timings.append({"y_top": lp["y_top"], "y_bottom": lp["y_bottom"], "start": prev_end, "end": prev_end + 1.0})
+            line_timings.append({"text": lp["text"], "y_top": lp["y_top"], "y_bottom": lp["y_bottom"], "start": prev_end, "end": prev_end + 1.0})
             continue
-        start = all_word_timestamps[word_idx]["start"]
-        end = all_word_timestamps[word_idx + n - 1]["end"]
-        line_timings.append({"y_top": lp["y_top"], "y_bottom": lp["y_bottom"], "start": start, "end": end})
-        word_idx += n
+
+        if _chunk_size > 0:
+            # Split this line's words into N-word chunks; each gets its own timing entry.
+            for ci in range(0, n, _chunk_size):
+                chunk_words = line_words[ci : ci + _chunk_size]
+                cw_n = len(chunk_words)
+                if word_idx + cw_n > len(all_word_timestamps):
+                    cw_n = max(0, len(all_word_timestamps) - word_idx)
+                if cw_n <= 0:
+                    break
+                c_start = all_word_timestamps[word_idx]["start"]
+                c_end   = all_word_timestamps[word_idx + cw_n - 1]["end"]
+                line_timings.append({
+                    "text": " ".join(chunk_words[:cw_n]),
+                    "y_top": lp["y_top"], "y_bottom": lp["y_bottom"],
+                    "start": c_start, "end": c_end,
+                })
+                word_idx += cw_n
+        else:
+            start = all_word_timestamps[word_idx]["start"]
+            end   = all_word_timestamps[word_idx + n - 1]["end"]
+            line_timings.append({"text": lp["text"], "y_top": lp["y_top"], "y_bottom": lp["y_bottom"], "start": start, "end": end})
+            word_idx += n
+
+    # Pre-render karaoke images — one per timing entry (chunk or full line).
+    # Only used in karaoke mode but cheap to build unconditionally.
+    karaoke_line_imgs: list = []
+    for lt_entry in line_timings:
+        karaoke_line_imgs.append(np.array(_render_karaoke_line(lt_entry.get("text", " "))))
 
     # Display sizing
     title_len = len(reddit_obj.get("thread_title", ""))
@@ -458,91 +559,199 @@ def make_final_video(
         return 1.0 + ZOOM_AMOUNT * zoom_progress
 
     # Combined frame renderer with pop-in header + mask-reveal body
+    HEADER_DISMISS_DUR = 0.4   # seconds to fade header out once body starts
+
+    def _header_alpha(t) -> float:
+        """1.0 while title is playing; fades to 0 over HEADER_DISMISS_DUR once body starts."""
+        if not dismiss_title_on_body or t < title_dur:
+            return 1.0
+        elapsed = t - title_dur
+        if elapsed >= HEADER_DISMISS_DUR:
+            return 0.0
+        return 1.0 - elapsed / HEADER_DISMISS_DUR
+
     def make_combined_frame(t):
         frame = np.zeros((H, W, 3), dtype=np.uint8)
 
-        # Header with pop-in + drift up
-        scale = get_header_scale(t)
-        cur_w = int(DISPLAY_W * scale)
-        cur_h = int(HEADER_DISP_H * scale)
-        h_pil = Image.fromarray(header_img).resize((cur_w, cur_h), Image.LANCZOS)
-        h_arr = np.array(h_pil)
-        x = (W - cur_w) // 2
-        slide_progress = min(1.0, t / total_card_dur)
-        base_y = int(HEADER_Y_START + (HEADER_Y_END - HEADER_Y_START) * slide_progress)
-        base_center_y = base_y + HEADER_DISP_H // 2
-        y_off = base_center_y - cur_h // 2
-        a = h_arr[:, :, 3:4].astype(np.float32) / 255.0
-        # Bounds
-        src_y = max(0, -y_off)
-        dst_y = max(0, y_off)
-        src_x = max(0, -x)
-        dst_x = max(0, x)
-        ph = min(cur_h - src_y, H - dst_y)
-        pw = min(cur_w - src_x, W - dst_x)
-        if ph > 0 and pw > 0:
-            bg = frame[dst_y:dst_y+ph, dst_x:dst_x+pw].astype(np.float32)
-            rgb = h_arr[src_y:src_y+ph, src_x:src_x+pw, :3].astype(np.float32)
-            al = a[src_y:src_y+ph, src_x:src_x+pw]
-            frame[dst_y:dst_y+ph, dst_x:dst_x+pw] = (rgb * al + bg * (1 - al)).astype(np.uint8)
+        # Header with pop-in + drift up (+ optional dismiss fade)
+        h_alpha = _header_alpha(t)
+        if h_alpha > 0:
+            scale = get_header_scale(t)
+            cur_w = int(DISPLAY_W * scale)
+            cur_h = int(HEADER_DISP_H * scale)
+            h_pil = Image.fromarray(header_img).resize((cur_w, cur_h), Image.LANCZOS)
+            h_arr = np.array(h_pil)
+            x = (W - cur_w) // 2
+            slide_progress = min(1.0, t / total_card_dur)
+            base_y = int(HEADER_Y_START + (HEADER_Y_END - HEADER_Y_START) * slide_progress)
+            base_center_y = base_y + HEADER_DISP_H // 2
+            y_off = base_center_y - cur_h // 2
+            a = h_arr[:, :, 3:4].astype(np.float32) / 255.0 * h_alpha
+            # Bounds
+            src_y = max(0, -y_off)
+            dst_y = max(0, y_off)
+            src_x = max(0, -x)
+            dst_x = max(0, x)
+            ph = min(cur_h - src_y, H - dst_y)
+            pw = min(cur_w - src_x, W - dst_x)
+            if ph > 0 and pw > 0:
+                bg = frame[dst_y:dst_y+ph, dst_x:dst_x+pw].astype(np.float32)
+                rgb = h_arr[src_y:src_y+ph, src_x:src_x+pw, :3].astype(np.float32)
+                al = a[src_y:src_y+ph, src_x:src_x+pw]
+                frame[dst_y:dst_y+ph, dst_x:dst_x+pw] = (rgb * al + bg * (1 - al)).astype(np.uint8)
 
         # Body — invisible until text starts, swaps pages every 6 lines
         if t >= title_dur:
-            page_idx, mb, mask_start = get_active_page_and_mask(t - title_dur)
-            if mb > mask_start:
-                cur_body = page_imgs[page_idx].copy()
-                cur_body[mb:, :, 3] = 0
-                cur_h, cur_w = cur_body.shape[:2]
-                disp_h = int(cur_h * (DISPLAY_W / cur_w))
-                b_pil = Image.fromarray(cur_body).resize((DISPLAY_W, disp_h), Image.LANCZOS)
-                b_arr = np.array(b_pil)
-                bx = (W - DISPLAY_W) // 2
-                a2 = b_arr[:, :, 3:4].astype(np.float32) / 255.0
-                ph2 = min(disp_h, H - BODY_Y)
-                bg2 = frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W].astype(np.float32)
-                frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W] = (b_arr[:ph2, :, :3].astype(np.float32) * a2[:ph2] + bg2 * (1 - a2[:ph2])).astype(np.uint8)
+            if body_style == "karaoke":
+                # ── Karaoke mode: one line at a time, centred on screen ──────
+                # Find the active line: the last one whose start <= t_body
+                t_body = t - title_dur
+                active_idx = None
+                for li, lt in enumerate(line_timings):
+                    if t_body >= lt["start"]:
+                        active_idx = li
+                if active_idx is not None:
+                    lt = line_timings[active_idx]
+                    k_arr = karaoke_line_imgs[active_idx]
+                    kh, kw = k_arr.shape[:2]
+
+                    # Pop-in: scale 80%→100% over POP_DUR from line start
+                    elapsed = t_body - lt["start"]
+                    if elapsed < POP_DUR:
+                        pop_p = elapsed / POP_DUR
+                        pop_s = 0.8 + 0.2 * (1 - (1 - pop_p) ** 4)
+                        nw = max(1, int(kw * pop_s))
+                        nh = max(1, int(kh * pop_s))
+                        k_pil = Image.fromarray(k_arr).resize((nw, nh), Image.LANCZOS)
+                        k_arr = np.array(k_pil)
+                        kh, kw = nh, nw
+
+                    # Fade-out: last 0.15 s before next line (or end)
+                    FADE_OUT = 0.15
+                    if active_idx + 1 < len(line_timings):
+                        next_start = line_timings[active_idx + 1]["start"]
+                        time_left = next_start - t_body
+                    else:
+                        time_left = lt["end"] - t_body
+                    if time_left < FADE_OUT and time_left >= 0:
+                        alpha_scale = time_left / FADE_OUT
+                        k_arr = k_arr.copy()
+                        k_arr[:, :, 3] = (k_arr[:, :, 3].astype(np.float32) * alpha_scale).astype(np.uint8)
+
+                    # Centre horizontally, place at ~60% down the screen
+                    bx = max(0, (W - kw) // 2)
+                    by = int(H * 0.60) - kh // 2
+                    by = max(0, min(by, H - kh))
+                    a2 = k_arr[:, :, 3:4].astype(np.float32) / 255.0
+                    ph2 = min(kh, H - by)
+                    pw2 = min(kw, W - bx)
+                    if ph2 > 0 and pw2 > 0:
+                        bg2 = frame[by:by+ph2, bx:bx+pw2].astype(np.float32)
+                        frame[by:by+ph2, bx:bx+pw2] = (
+                            k_arr[:ph2, :pw2, :3].astype(np.float32) * a2[:ph2, :pw2]
+                            + bg2 * (1 - a2[:ph2, :pw2])
+                        ).astype(np.uint8)
+            else:
+                # ── Card mode: mask-reveal on the body page image ────────────
+                page_idx, mb, mask_start = get_active_page_and_mask(t - title_dur)
+                if mb > mask_start:
+                    cur_body = page_imgs[page_idx].copy()
+                    cur_body[mb:, :, 3] = 0
+                    cur_h, cur_w = cur_body.shape[:2]
+                    disp_h = int(cur_h * (DISPLAY_W / cur_w))
+                    b_pil = Image.fromarray(cur_body).resize((DISPLAY_W, disp_h), Image.LANCZOS)
+                    b_arr = np.array(b_pil)
+                    bx = (W - DISPLAY_W) // 2
+                    a2 = b_arr[:, :, 3:4].astype(np.float32) / 255.0
+                    ph2 = min(disp_h, H - BODY_Y)
+                    bg2 = frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W].astype(np.float32)
+                    frame[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W] = (b_arr[:ph2, :, :3].astype(np.float32) * a2[:ph2] + bg2 * (1 - a2[:ph2])).astype(np.uint8)
 
         return frame
 
     def make_combined_mask(t):
         mask = np.zeros((H, W), dtype=np.float64)
 
-        # Header mask
-        scale = get_header_scale(t)
-        cur_w = int(DISPLAY_W * scale)
-        cur_h = int(HEADER_DISP_H * scale)
-        h_pil = Image.fromarray(header_img).resize((cur_w, cur_h), Image.LANCZOS)
-        h_arr = np.array(h_pil)
-        x = (W - cur_w) // 2
-        slide_progress = min(1.0, t / total_card_dur)
-        base_y = int(HEADER_Y_START + (HEADER_Y_END - HEADER_Y_START) * slide_progress)
-        base_center_y = base_y + HEADER_DISP_H // 2
-        y_off = base_center_y - cur_h // 2
-        src_y = max(0, -y_off)
-        dst_y = max(0, y_off)
-        src_x = max(0, -x)
-        dst_x = max(0, x)
-        ph = min(cur_h - src_y, H - dst_y)
-        pw = min(cur_w - src_x, W - dst_x)
-        if ph > 0 and pw > 0:
-            mask[dst_y:dst_y+ph, dst_x:dst_x+pw] = h_arr[src_y:src_y+ph, src_x:src_x+pw, 3] / 255.0
+        # Header mask (respects dismiss fade)
+        h_alpha = _header_alpha(t)
+        if h_alpha > 0:
+            scale = get_header_scale(t)
+            cur_w = int(DISPLAY_W * scale)
+            cur_h = int(HEADER_DISP_H * scale)
+            h_pil = Image.fromarray(header_img).resize((cur_w, cur_h), Image.LANCZOS)
+            h_arr = np.array(h_pil)
+            x = (W - cur_w) // 2
+            slide_progress = min(1.0, t / total_card_dur)
+            base_y = int(HEADER_Y_START + (HEADER_Y_END - HEADER_Y_START) * slide_progress)
+            base_center_y = base_y + HEADER_DISP_H // 2
+            y_off = base_center_y - cur_h // 2
+            src_y = max(0, -y_off)
+            dst_y = max(0, y_off)
+            src_x = max(0, -x)
+            dst_x = max(0, x)
+            ph = min(cur_h - src_y, H - dst_y)
+            pw = min(cur_w - src_x, W - dst_x)
+            if ph > 0 and pw > 0:
+                mask[dst_y:dst_y+ph, dst_x:dst_x+pw] = h_arr[src_y:src_y+ph, src_x:src_x+pw, 3] / 255.0 * h_alpha
 
         # Body mask — swaps pages
         if t >= title_dur:
-            page_idx, mb, mask_start = get_active_page_and_mask(t - title_dur)
-            if mb > mask_start:
-                cur_body = page_imgs[page_idx].copy()
-                cur_body[mb:, :, 3] = 0
-                cur_h, cur_w = cur_body.shape[:2]
-                disp_h = int(cur_h * (DISPLAY_W / cur_w))
-                b_pil = Image.fromarray(cur_body).resize((DISPLAY_W, disp_h), Image.LANCZOS)
-                b_arr = np.array(b_pil)
-                bx = (W - DISPLAY_W) // 2
-                ph2 = min(disp_h, H - BODY_Y)
-                mask[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W] = np.maximum(
-                    mask[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W],
-                    b_arr[:ph2, :, 3] / 255.0
-                )
+            if body_style == "karaoke":
+                # ── Karaoke mask: just the active line's alpha ───────────────
+                t_body = t - title_dur
+                active_idx = None
+                for li, lt in enumerate(line_timings):
+                    if t_body >= lt["start"]:
+                        active_idx = li
+                if active_idx is not None:
+                    lt = line_timings[active_idx]
+                    k_arr = karaoke_line_imgs[active_idx]
+                    kh, kw = k_arr.shape[:2]
+
+                    elapsed = t_body - lt["start"]
+                    if elapsed < POP_DUR:
+                        pop_p = elapsed / POP_DUR
+                        pop_s = 0.8 + 0.2 * (1 - (1 - pop_p) ** 4)
+                        nw = max(1, int(kw * pop_s))
+                        nh = max(1, int(kh * pop_s))
+                        k_arr = np.array(Image.fromarray(k_arr).resize((nw, nh), Image.LANCZOS))
+                        kh, kw = nh, nw
+
+                    FADE_OUT = 0.15
+                    if active_idx + 1 < len(line_timings):
+                        time_left = line_timings[active_idx + 1]["start"] - t_body
+                    else:
+                        time_left = lt["end"] - t_body
+                    alpha_arr = k_arr[:, :, 3].astype(np.float32) / 255.0
+                    if time_left < FADE_OUT and time_left >= 0:
+                        alpha_arr = alpha_arr * (time_left / FADE_OUT)
+
+                    bx = max(0, (W - kw) // 2)
+                    by = int(H * 0.60) - kh // 2
+                    by = max(0, min(by, H - kh))
+                    ph2 = min(kh, H - by)
+                    pw2 = min(kw, W - bx)
+                    if ph2 > 0 and pw2 > 0:
+                        mask[by:by+ph2, bx:bx+pw2] = np.maximum(
+                            mask[by:by+ph2, bx:bx+pw2],
+                            alpha_arr[:ph2, :pw2],
+                        )
+            else:
+                # ── Card mask: mask-reveal on the body page image ────────────
+                page_idx, mb, mask_start = get_active_page_and_mask(t - title_dur)
+                if mb > mask_start:
+                    cur_body = page_imgs[page_idx].copy()
+                    cur_body[mb:, :, 3] = 0
+                    cur_h, cur_w = cur_body.shape[:2]
+                    disp_h = int(cur_h * (DISPLAY_W / cur_w))
+                    b_pil = Image.fromarray(cur_body).resize((DISPLAY_W, disp_h), Image.LANCZOS)
+                    b_arr = np.array(b_pil)
+                    bx = (W - DISPLAY_W) // 2
+                    ph2 = min(disp_h, H - BODY_Y)
+                    mask[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W] = np.maximum(
+                        mask[BODY_Y:BODY_Y+ph2, bx:bx+DISPLAY_W],
+                        b_arr[:ph2, :, 3] / 255.0
+                    )
 
         return mask
 
