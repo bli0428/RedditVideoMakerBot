@@ -1,9 +1,16 @@
 import json
 from os.path import exists
 
+import requests
+
 from utils import settings
 from utils.ai_methods import sort_by_similarity
 from utils.console import print_substep
+
+_HEADERS = {
+    "User-Agent": "RedditVideoMakerBot/4.0 (public JSON; no auth)",
+    "Accept": "application/json",
+}
 
 
 def _contains_blocked_words(text: str) -> bool:
@@ -16,12 +23,31 @@ def _contains_blocked_words(text: str) -> bool:
     return any(word in text_lower for word in blocked)
 
 
+def _fetch_top(subreddit: str, time_filter: str = "day", limit: int = 50):
+    """Fetch top posts from a subreddit via the public JSON endpoint.
+
+    Returns a list of lightweight post objects that have the same attributes
+    the rest of the codebase expects (.title, .selftext, .over_18, etc.).
+    """
+    from reddit.subreddit import _RedditPost  # avoid circular import at module level
+
+    resp = requests.get(
+        f"https://www.reddit.com/r/{subreddit}/top.json",
+        headers=_HEADERS,
+        params={"t": time_filter, "limit": limit, "raw_json": 1},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [_RedditPost(child["data"]) for child in data["data"]["children"]]
+
+
 def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similarity_scores=None):
     """_summary_
 
     Args:
         submissions (list): List of posts that are going to potentially be generated into a video
-        subreddit (praw.Reddit.SubredditHelper): Chosen subreddit
+        subreddit (str): Chosen subreddit name
 
     Returns:
         Any: The submission that has not been done
@@ -42,6 +68,12 @@ def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similari
     for i, submission in enumerate(submissions):
         if already_done(done_videos, submission):
             continue
+        # Flair filter
+        required_flair = settings.config["reddit"]["thread"].get("required_flair", "")
+        if required_flair:
+            post_flair = getattr(submission, "link_flair_text", "") or ""
+            if post_flair.lower() != required_flair.lower():
+                continue
         if submission.over_18:
             try:
                 if not settings.config["settings"]["allow_nsfw"]:
@@ -76,7 +108,7 @@ def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similari
                         f"Post is too long ({len(submission.selftext)}), try with a different post. ({settings.config['settings']['storymode_max_length']} character limit)"
                     )
                     continue
-                elif len(submission.selftext) < 30:
+                elif len(submission.selftext) < 200:
                     continue
         if settings.config["settings"]["storymode"] and not submission.is_self:
             continue
@@ -97,7 +129,8 @@ def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similari
         print("All submissions have been done.")
 
     return get_subreddit_undone(
-        subreddit.top(
+        _fetch_top(
+            subreddit,
             time_filter=VALID_TIME_FILTERS[index],
             limit=(50 if int(index) == 0 else index + 1 * 50),
         ),

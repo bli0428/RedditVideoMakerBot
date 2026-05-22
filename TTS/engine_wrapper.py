@@ -70,6 +70,23 @@ class TTSEngine:
         Path(self.path).mkdir(parents=True, exist_ok=True)
         print_step("Saving Text to MP3 files...")
 
+        # Auto-detect gender from post text and pick voice accordingly
+        if settings.config["settings"]["tts"]["voice_choice"].lower() == "elevenlabs":
+            from utils.gender_detect import pick_voice
+            from utils.console import print_substep
+
+            # Combine title + body for detection
+            detect_text = self.reddit_object["thread_title"] + " "
+            post = self.reddit_object.get("thread_post", "")
+            if isinstance(post, list):
+                detect_text += " ".join(post)
+            elif isinstance(post, str):
+                detect_text += post
+
+            chosen_voice = pick_voice(detect_text)
+            settings.config["settings"]["tts"]["elevenlabs_voice_name"] = chosen_voice
+            print_substep(f"Auto-detected voice ID: {chosen_voice}", style="bold blue")
+
         self.add_periods()
         self.call_tts("title", process_text(self.reddit_object["thread_title"]))
         # processed_text = ##self.reddit_object["thread_post"] != ""

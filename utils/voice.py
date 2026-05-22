@@ -85,6 +85,7 @@ def sanitize_text(text: str) -> str:
 
     # note: not removing apostrophes
     regex_expr = r"\s['|’]|['|’]\s|[\^_~@!&;#:\-%—“”‘\"%\*/{}\[\]\(\)\\|<>=+]"
+    result = result.replace("%", " percent")
     result = re.sub(regex_expr, " ", result)
     result = result.replace("+", "plus").replace("&", "and")
 

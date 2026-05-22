@@ -1,15 +1,13 @@
 import json
 import time
 
-from praw.models import Submission
-
 from utils import settings
 from utils.console import print_step
 
 
 def check_done(
-    redditobj: Submission,
-) -> Submission:
+    redditobj,
+):
     # don't set this to be run anyplace that isn't subreddit.py bc of inspect stack
     """Checks if the chosen post has already been generated
 

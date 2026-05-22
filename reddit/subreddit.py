@@ -1,8 +1,6 @@
 import re
 
-import praw
-from praw.models import MoreComments
-from prawcore.exceptions import ResponseException
+import requests
 
 from utils import settings
 from utils.ai_methods import sort_by_similarity
@@ -12,88 +10,147 @@ from utils.subreddit import _contains_blocked_words, get_subreddit_undone
 from utils.videos import check_done
 from utils.voice import sanitize_text
 
+# Reddit's public JSON API — no API key or OAuth required.
+_HEADERS = {
+    "User-Agent": "RedditVideoMakerBot/4.0 (public JSON; no auth)",
+    "Accept": "application/json",
+}
+
+
+class _RedditPost:
+    """Lightweight stand-in for praw.models.Submission so the rest of the
+    codebase can keep using attribute access (submission.title, etc.)."""
+
+    def __init__(self, data: dict):
+        self._data = data
+        self.id: str = data["id"]
+        self.title: str = data.get("title", "")
+        self.selftext: str = data.get("selftext", "")
+        self.score: int = data.get("score", 0)
+        self.upvote_ratio: float = data.get("upvote_ratio", 0.0)
+        self.num_comments: int = data.get("num_comments", 0)
+        self.permalink: str = data.get("permalink", "")
+        self.over_18: bool = data.get("over_18", False)
+        self.stickied: bool = data.get("stickied", False)
+        self.is_self: bool = data.get("is_self", True)
+        self.author: str | None = data.get("author")
+        self.link_flair_text: str | None = data.get("link_flair_text")
+
+    def __str__(self) -> str:
+        """Return the post ID — matches praw.models.Submission.__str__."""
+        return self.id
+
+
+class _RedditComment:
+    """Lightweight stand-in for praw.models.Comment."""
+
+    def __init__(self, data: dict):
+        self.id: str = data["id"]
+        self.body: str = data.get("body", "")
+        self.permalink: str = data.get("permalink", "")
+        self.stickied: bool = data.get("stickied", False)
+        self.author: str | None = data.get("author")
+
+
+def _fetch_json(url: str, params: dict | None = None) -> dict:
+    """GET a Reddit .json URL and return the parsed response."""
+    resp = requests.get(url, headers=_HEADERS, params=params, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _fetch_top(subreddit: str, limit: int = 25, time_filter: str = "all") -> list[_RedditPost]:
+    """Return top posts for a subreddit via the public JSON endpoint."""
+    data = _fetch_json(f"https://www.reddit.com/r/{subreddit}/top.json", {"limit": limit, "t": time_filter, "raw_json": 1})
+    posts = []
+    for child in data["data"]["children"]:
+        posts.append(_RedditPost(child["data"]))
+    return posts
+
+
+def _fetch_submission(post_id: str) -> _RedditPost:
+    """Fetch a single submission by ID."""
+    data = _fetch_json(f"https://www.reddit.com/comments/{post_id}.json", {"raw_json": 1})
+    # Reddit returns a two-element list: [post listing, comments listing]
+    return _RedditPost(data[0]["data"]["children"][0]["data"])
+
+
+def _fetch_avatar(username: str | None) -> str:
+    """Fetch a Reddit user's profile picture URL. Returns empty string on failure."""
+    if not username:
+        return ""
+    try:
+        import html
+        data = _fetch_json(f"https://www.reddit.com/user/{username}/about.json", {"raw_json": 1})
+        icon = data.get("data", {}).get("icon_img", "")
+        # Clean up HTML entities and strip query params after the image extension
+        icon = html.unescape(icon)
+        return icon
+    except Exception:
+        return ""
+
+
+def _fetch_comments(post_id: str) -> list[_RedditComment]:
+    """Fetch top-level comments for a submission."""
+    data = _fetch_json(f"https://www.reddit.com/comments/{post_id}.json", {"limit": 200, "raw_json": 1})
+    comments = []
+    for child in data[1]["data"]["children"]:
+        if child["kind"] != "t1":  # skip "more" stubs
+            continue
+        comments.append(_RedditComment(child["data"]))
+    return comments
+
 
 def get_subreddit_threads(POST_ID: str):
     """
-    Returns a list of threads from the AskReddit subreddit.
+    Returns a list of threads from the chosen subreddit using Reddit's
+    public JSON endpoints (no API key / OAuth required).
     """
 
-    print_substep("Logging into Reddit.")
+    print_substep("Fetching from Reddit (public JSON, no login required).")
 
     content = {}
-    if settings.config["reddit"]["creds"]["2fa"]:
-        print("\nEnter your two-factor authentication code from your authenticator app.\n")
-        code = input("> ")
-        print()
-        pw = settings.config["reddit"]["creds"]["password"]
-        passkey = f"{pw}:{code}"
-    else:
-        passkey = settings.config["reddit"]["creds"]["password"]
-    username = settings.config["reddit"]["creds"]["username"]
-    if str(username).casefold().startswith("u/"):
-        username = username[2:]
-    try:
-        reddit = praw.Reddit(
-            client_id=settings.config["reddit"]["creds"]["client_id"],
-            client_secret=settings.config["reddit"]["creds"]["client_secret"],
-            user_agent="Accessing Reddit threads",
-            username=username,
-            passkey=passkey,
-            check_for_async=False,
-        )
-    except ResponseException as e:
-        if e.response.status_code == 401:
-            print("Invalid credentials - please check them in config.toml")
-    except:
-        print("Something went wrong...")
 
     # Ask user for subreddit input
     print_step("Getting subreddit threads...")
     similarity_score = 0
-    if not settings.config["reddit"]["thread"][
-        "subreddit"
-    ]:  # note to user. you can have multiple subreddits via reddit.subreddit("redditdev+learnpython")
+    if not settings.config["reddit"]["thread"]["subreddit"]:
         try:
-            subreddit = reddit.subreddit(
-                re.sub(r"r\/", "", input("What subreddit would you like to pull from? "))
-                # removes the r/ from the input
-            )
+            subreddit_name = re.sub(r"r/", "", input("What subreddit would you like to pull from? "))
         except ValueError:
-            subreddit = reddit.subreddit("askreddit")
+            subreddit_name = "askreddit"
             print_substep("Subreddit not defined. Using AskReddit.")
     else:
         sub = settings.config["reddit"]["thread"]["subreddit"]
         print_substep(f"Using subreddit: r/{sub} from TOML config")
-        subreddit_choice = sub
-        if str(subreddit_choice).casefold().startswith("r/"):  # removes the r/ from the input
-            subreddit_choice = subreddit_choice[2:]
-        subreddit = reddit.subreddit(subreddit_choice)
+        subreddit_name = sub
+        if str(subreddit_name).casefold().startswith("r/"):
+            subreddit_name = subreddit_name[2:]
 
-    if POST_ID:  # would only be called if there are multiple queued posts
-        submission = reddit.submission(id=POST_ID)
+    if POST_ID:
+        submission = _fetch_submission(POST_ID)
 
     elif (
         settings.config["reddit"]["thread"]["post_id"]
         and len(str(settings.config["reddit"]["thread"]["post_id"]).split("+")) == 1
     ):
-        submission = reddit.submission(id=settings.config["reddit"]["thread"]["post_id"])
-    elif settings.config["ai"]["ai_similarity_enabled"]:  # ai sorting based on comparison
-        threads = subreddit.hot(limit=50)
+        submission = _fetch_submission(settings.config["reddit"]["thread"]["post_id"])
+    elif settings.config["ai"]["ai_similarity_enabled"]:
+        threads = _fetch_top(subreddit_name, limit=50)
         keywords = settings.config["ai"]["ai_similarity_keywords"].split(",")
         keywords = [keyword.strip() for keyword in keywords]
-        # Reformat the keywords for printing
         keywords_print = ", ".join(keywords)
         print(f"Sorting threads by similarity to the given keywords: {keywords_print}")
         threads, similarity_scores = sort_by_similarity(threads, keywords)
         submission, similarity_score = get_subreddit_undone(
-            threads, subreddit, similarity_scores=similarity_scores
+            threads, subreddit_name, similarity_scores=similarity_scores
         )
     else:
-        threads = subreddit.hot(limit=25)
-        submission = get_subreddit_undone(threads, subreddit)
+        threads = _fetch_top(subreddit_name, limit=25)
+        submission = get_subreddit_undone(threads, subreddit_name)
 
     if submission is None:
-        return get_subreddit_threads(POST_ID)  # submission already done. rerun
+        return get_subreddit_threads(POST_ID)  # submission already done — rerun
 
     elif not submission.num_comments and settings.config["settings"]["storymode"] == "false":
         print_substep("No comments found. Skipping.")
@@ -104,7 +161,7 @@ def get_subreddit_threads(POST_ID: str):
     upvotes = submission.score
     ratio = submission.upvote_ratio * 100
     num_comments = submission.num_comments
-    threadurl = f"https://new.reddit.com/{submission.permalink}"
+    threadurl = f"https://www.reddit.com{submission.permalink}"
 
     print_substep(f"Video will be: {submission.title} :thumbsup:", style="bold green")
     print_substep(f"Thread url is: {threadurl} :thumbsup:", style="bold green")
@@ -121,6 +178,8 @@ def get_subreddit_threads(POST_ID: str):
     content["thread_title"] = submission.title
     content["thread_id"] = submission.id
     content["is_nsfw"] = submission.over_18
+    content["author"] = submission.author or "Anonymous"
+    content["avatar_url"] = _fetch_avatar(submission.author)
     content["comments"] = []
     if settings.config["settings"]["storymode"]:
         if settings.config["settings"]["storymodemethod"] == 1:
@@ -128,33 +187,28 @@ def get_subreddit_threads(POST_ID: str):
         else:
             content["thread_post"] = submission.selftext
     else:
-        for top_level_comment in submission.comments:
-            if isinstance(top_level_comment, MoreComments):
+        comments = _fetch_comments(submission.id)
+        for comment in comments:
+            if comment.body in ["[removed]", "[deleted]"]:
                 continue
-
-            if top_level_comment.body in ["[removed]", "[deleted]"]:
-                continue  # # see https://github.com/JasonLovesDoggo/RedditVideoMakerBot/issues/78
-            if _contains_blocked_words(top_level_comment.body):
+            if _contains_blocked_words(comment.body):
                 continue
-            if not top_level_comment.stickied:
-                sanitised = sanitize_text(top_level_comment.body)
+            if not comment.stickied:
+                sanitised = sanitize_text(comment.body)
                 if not sanitised or sanitised == " ":
                     continue
-                if len(top_level_comment.body) <= int(
+                if len(comment.body) <= int(
                     settings.config["reddit"]["thread"]["max_comment_length"]
                 ):
-                    if len(top_level_comment.body) >= int(
+                    if len(comment.body) >= int(
                         settings.config["reddit"]["thread"]["min_comment_length"]
                     ):
-                        if (
-                            top_level_comment.author is not None
-                            and sanitize_text(top_level_comment.body) is not None
-                        ):  # if errors occur with this change to if not.
+                        if comment.author is not None and sanitize_text(comment.body) is not None:
                             content["comments"].append(
                                 {
-                                    "comment_body": top_level_comment.body,
-                                    "comment_url": top_level_comment.permalink,
-                                    "comment_id": top_level_comment.id,
+                                    "comment_body": comment.body,
+                                    "comment_url": comment.permalink,
+                                    "comment_id": comment.id,
                                 }
                             )
 

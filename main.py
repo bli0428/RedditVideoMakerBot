@@ -6,7 +6,7 @@ from pathlib import Path
 from subprocess import Popen
 from typing import Dict, NoReturn
 
-from prawcore import ResponseException
+import requests
 
 from reddit.subreddit import get_subreddit_threads
 from utils import settings
@@ -119,9 +119,9 @@ if __name__ == "__main__":
             main()
     except KeyboardInterrupt:
         shutdown()
-    except ResponseException:
-        print_markdown("## Invalid credentials")
-        print_markdown("Please check your credentials in the config.toml file")
+    except requests.exceptions.HTTPError as e:
+        print_markdown("## Reddit request failed")
+        print_markdown(f"HTTP error when fetching from Reddit: {e}")
         shutdown()
     except Exception as err:
         config["settings"]["tts"]["tiktok_sessionid"] = "REDACTED"
