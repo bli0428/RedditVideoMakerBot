@@ -63,3 +63,15 @@ openai_api_url = { optional = true, default = "https://api.openai.com/v1/", exam
 openai_api_key = { optional = true, example = "sk-abc123def456...", explanation = "Your OpenAI API key for TTS generation" }
 openai_voice_name = { optional = false, default = "alloy", example = "alloy", explanation = "The voice used for OpenAI TTS generation", options = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "af_heart"] }
 openai_model = { optional = false, default = "tts-1", example = "tts-1", explanation = "The model variant used for OpenAI TTS generation", options = ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"] }
+
+[translation]
+provider = { optional = true, default = "none", options = ["none", "anthropic"], explanation = "Translation backend. 'none' disables translation; 'anthropic' uses Claude via the Anthropic SDK." }
+target_lang = { optional = true, default = "", explanation = "ISO 639-1 / BCP-47 target language code. Empty disables translation. Examples: 'es', 'pt-BR', 'ja'." }
+failure_policy = { optional = true, default = "skip", options = ["skip", "fail"], explanation = "What to do when Anthropic raises an error: 'skip' uses the original text and warns; 'fail' re-raises." }
+cache_enabled = { optional = true, type = "bool", default = true, options = [true, false], explanation = "Cache translations under assets/temp/{thread_id}/translation_cache.json so repeated runs don't re-call Anthropic." }
+force_translate = { optional = true, type = "bool", default = false, options = [true, false], explanation = "Skip source-language detection and translate every field unconditionally." }
+
+[translation.anthropic]
+model = { optional = true, default = "claude-3-5-sonnet-latest", explanation = "Claude model identifier passed with each request." }
+max_output_tokens = { optional = true, type = "int", default = 4096, nmin = 1, explanation = "Maximum output tokens per Anthropic request." }
+api_key = { optional = true, default = "", explanation = "Anthropic API key. The ANTHROPIC_API_KEY environment variable takes precedence over this value." }

@@ -140,3 +140,46 @@ Cyteon (cyteon) - https://github.com/cyteon
 
 ## LICENSE
 [Roboto Fonts](https://fonts.google.com/specimen/Roboto/about) are licensed under [Apache License V2](https://www.apache.org/licenses/LICENSE-2.0)
+
+## Translation
+
+The bot can translate post titles, body text, and comments into a target language using the Anthropic Claude API. Translation is configured via the `[translation]` and `[translation.anthropic]` sections in `config.toml`.
+
+### `[translation]`
+
+| Key | Default | Options | Description |
+|-----|---------|---------|-------------|
+| `provider` | `"none"` | `"none"`, `"anthropic"` | Translation backend. `"none"` disables translation entirely. Any unrecognized value is treated as `"none"` with a warning logged. |
+| `target_lang` | `""` | Any ISO 639-1 / BCP-47 code | Target language code (e.g. `"es"`, `"pt-BR"`, `"ja"`). An empty string disables translation. |
+| `failure_policy` | `"skip"` | `"skip"`, `"fail"` | What to do when Anthropic returns an error. `"skip"` uses the original text and logs a warning; `"fail"` re-raises and aborts the run. |
+| `cache_enabled` | `true` | `true`, `false` | Cache translations to disk so repeated runs on the same post don't re-call Anthropic. |
+| `force_translate` | `false` | `true`, `false` | Skip source-language detection and translate every field unconditionally. |
+
+### `[translation.anthropic]`
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `model` | `"claude-3-5-sonnet-latest"` | Claude model identifier passed with each request. |
+| `max_output_tokens` | `4096` | Maximum output tokens per Anthropic request. |
+| `api_key` | `""` | Anthropic API key. The `ANTHROPIC_API_KEY` environment variable takes precedence over this value when both are set. |
+
+### Notes
+
+- **API key precedence**: `ANTHROPIC_API_KEY` environment variable overrides `[translation.anthropic].api_key`. If neither is set and `provider = "anthropic"`, the error is deferred until the first translation attempt and the configured `failure_policy` is applied.
+- **Disabling translation**: Set `provider = "none"` to skip translation entirely. Setting `provider` to an unknown value also disables translation but logs a warning naming the offending value.
+- **Translation cache**: When `cache_enabled = true`, translations are stored under `assets/temp/{thread_id}/translation_cache.json` and are cleaned up alongside other per-thread artifacts when the thread's temp directory is removed.
+
+### Example configuration
+
+```toml
+[translation]
+provider = "anthropic"
+target_lang = "es"
+failure_policy = "skip"
+cache_enabled = true
+
+[translation.anthropic]
+model = "claude-3-5-sonnet-latest"
+max_output_tokens = 4096
+api_key = ""  # or set ANTHROPIC_API_KEY in your environment
+```

@@ -3,7 +3,6 @@ import re
 from pathlib import Path
 from typing import Final
 
-import translators
 from playwright.sync_api import ViewportSize, sync_playwright
 from rich.progress import track
 
@@ -134,17 +133,14 @@ def get_screenshots_of_reddit_posts(reddit_object: dict, screenshot_num: int):
         if zoom != 1:
             page.evaluate(f"document.body.style.zoom={zoom}")
 
-        def translate_text(text: str) -> str:
-            return translators.translate_text(text, to_language=lang, translator="google")
-
         # ── Title screenshot ──────────────────────────────────────────────
         postcontentpath = f"assets/temp/{reddit_id}/png/title.png"
         try:
             post_el = page.locator("shreddit-post").first
 
             if lang:
-                print_substep("Translating post title...")
-                translated_title = translate_text(reddit_object["thread_title"])
+                print_substep("Injecting translated post title into page...")
+                translated_title = reddit_object["thread_title"]
                 page.evaluate(
                     """(tl) => {
                         const post = document.querySelector('shreddit-post');

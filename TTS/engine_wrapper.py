@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Tuple
 
 import numpy as np
-import translators
 from moviepy import AudioFileClip
 from moviepy.audio.AudioClip import AudioClip
 from moviepy.audio.fx import MultiplyVolume
@@ -196,10 +195,4 @@ class TTSEngine:
 
 
 def process_text(text: str, clean: bool = True):
-    lang = settings.config["reddit"]["thread"]["post_lang"]
-    new_text = sanitize_text(text) if clean else text
-    if lang:
-        print_substep("Translating Text...")
-        translated_text = translators.translate_text(text, translator="google", to_language=lang)
-        new_text = sanitize_text(translated_text)
-    return new_text
+    return sanitize_text(text) if clean else text

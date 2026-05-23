@@ -1,0 +1,10 @@
+{
+  "thread_id": "test123",
+  "thread_title": "Test post title",
+  "thread_post": "This is a short test post body.",
+  "author": "testuser",
+  "avatar_url": "",
+  "thread_score": 100,
+  "num_comments": 5,
+  "comments": []
+}

@@ -5,7 +5,6 @@ import requests
 from utils import settings
 from utils.ai_methods import sort_by_similarity
 from utils.console import print_step, print_substep
-from utils.posttextparser import posttextparser
 from utils.subreddit import _contains_blocked_words, get_subreddit_undone
 from utils.videos import check_done
 from utils.voice import sanitize_text
@@ -182,10 +181,7 @@ def get_subreddit_threads(POST_ID: str):
     content["avatar_url"] = _fetch_avatar(submission.author)
     content["comments"] = []
     if settings.config["settings"]["storymode"]:
-        if settings.config["settings"]["storymodemethod"] == 1:
-            content["thread_post"] = posttextparser(submission.selftext)
-        else:
-            content["thread_post"] = submission.selftext
+        content["thread_post"] = submission.selftext
     else:
         comments = _fetch_comments(submission.id)
         for comment in comments:

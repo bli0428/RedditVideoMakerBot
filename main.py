@@ -10,7 +10,9 @@ import requests
 
 from reddit.subreddit import get_subreddit_threads
 from utils import settings
+from utils.translation import Translation_Service, TranslationConfig
 from utils.cleanup import cleanup
+from utils.posttextparser import posttextparser
 from utils.console import print_markdown, print_step, print_substep
 from utils.ffmpeg_install import ffmpeg_install
 from utils.id import extract_id
@@ -21,7 +23,26 @@ from video_creation.background import (
     download_background_video,
     get_background_config,
 )
-from video_creation.final_video import make_final_video
+from video_creation.render import render_video as _render_video
+import warnings as _warnings
+from video_creation.render.errors import ConfigWarning as _ConfigWarning
+from video_creation.render.config import RenderConfig as _RenderConfig
+
+
+def make_final_video(number_of_clips, length, reddit_object, bg_config):
+    """Thin shim kept for call-site compatibility during Phase 5 transition."""
+    from utils import settings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", _ConfigWarning)
+        style_id = _RenderConfig.from_settings(settings.config).style_id
+    return _render_video(
+        style_id=style_id,
+        reddit_obj=reddit_object,
+        audio=None,
+        number_of_clips=number_of_clips,
+        length=length,
+        background_config=bg_config,
+    )
 from video_creation.screenshot_downloader import get_screenshots_of_reddit_posts
 from video_creation.voices import save_text_to_mp3
 
@@ -49,6 +70,10 @@ reddit_object: Dict[str, str | list]
 def main(POST_ID=None) -> None:
     global reddit_id, reddit_object
     reddit_object = get_subreddit_threads(POST_ID)
+    translation_config = TranslationConfig.from_settings(settings.config)
+    reddit_object = Translation_Service(translation_config).translate(reddit_object)
+    if settings.config["settings"]["storymode"] and settings.config["settings"]["storymodemethod"] == 1:
+        reddit_object["thread_post"] = posttextparser(reddit_object["thread_post"])
     reddit_id = extract_id(reddit_object)
     print_substep(f"Thread ID is {reddit_id}", style="bold blue")
     length, number_of_comments = save_text_to_mp3(reddit_object)

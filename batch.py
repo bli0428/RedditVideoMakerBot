@@ -17,8 +17,8 @@ from utils.cleanup import cleanup
 from utils.console import print_markdown, print_step, print_substep
 from utils.ffmpeg_install import ffmpeg_install
 from utils.id import extract_id
-from utils.posttextparser import posttextparser
 from utils.subreddit import _contains_blocked_words, already_done
+from utils.translation import Translation_Service, TranslationConfig
 from utils.voice import sanitize_text
 from video_creation.background import (
     chop_background,
@@ -123,10 +123,7 @@ def build_reddit_object(submission: _RedditPost) -> dict:
     }
 
     if settings.config["settings"]["storymode"]:
-        if settings.config["settings"]["storymodemethod"] == 1:
-            content["thread_post"] = posttextparser(submission.selftext)
-        else:
-            content["thread_post"] = submission.selftext
+        content["thread_post"] = submission.selftext
 
     return content
 
@@ -137,6 +134,11 @@ def make_one_video(submission: _RedditPost, video_num: int) -> bool:
 
     try:
         reddit_object = build_reddit_object(submission)
+        translation_config = TranslationConfig.from_settings(settings.config)
+        reddit_object = Translation_Service(translation_config).translate(reddit_object)
+        if settings.config["settings"]["storymode"] and settings.config["settings"]["storymodemethod"] == 1:
+            from utils.posttextparser import posttextparser  # local import per Req 15.4
+            reddit_object["thread_post"] = posttextparser(reddit_object["thread_post"])
         reddit_id = extract_id(reddit_object)
         print_substep(f"Post ID: {reddit_id}", style="bold blue")
 
