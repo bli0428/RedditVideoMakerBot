@@ -81,7 +81,7 @@ class CustomCardStyle(CardStylePlugin):
 
     # Header vertical position (fraction of canvas height, before random jitter)
     HEADER_Y_START_FRAC = 0.12
-    HEADER_Y_END_FRAC   = 0.11
+    HEADER_Y_END_FRAC   = 0.10
 
     # Body vertical position (fraction of canvas height, before random jitter)
     BODY_Y_FRAC = 0.55
@@ -335,24 +335,33 @@ class CustomCardStyle(CardStylePlugin):
 
         page_imgs = list(body.pages)
 
-        # Map line_timings to pages: group by page_index
+        # Assign line_timings to pages sequentially based on page sizes.
+        # page_index on LineTiming is always 0 (set by the orchestrator which
+        # has no image context), so we can't use it for grouping.
+        # Also, y_top/y_bottom on LineTiming are 0 (orchestrator has no image
+        # context), so we take pixel coords from page_line_positions instead.
         page_line_timings: list[list[dict]] = [[] for _ in page_imgs]
-        for lt in line_timings:
-            pi = lt.page_index
-            if pi < len(page_line_timings):
+        lt_list = list(line_timings)
+        lt_idx = 0
+        for pi, page_positions in enumerate(page_line_positions):
+            for pos in page_positions:
+                if lt_idx >= len(lt_list):
+                    break
+                lt = lt_list[lt_idx]
                 page_line_timings[pi].append({
                     "text": lt.text,
-                    "y_top": lt.y_top,
-                    "y_bottom": lt.y_bottom,
+                    "y_top": pos["y_top"],       # real pixel coords from rendered image
+                    "y_bottom": pos["y_bottom"],
                     "start": lt.start,
                     "end": lt.end,
                 })
+                lt_idx += 1
 
         def get_active_page_and_mask(t_body: float) -> tuple[int, int, int]:
             """Return (page_index, mask_bottom, mask_start) for body time t_body."""
             active_page = 0
             for pi, plt in enumerate(page_line_timings):
-                if plt and t_body >= plt[0]["start"]:
+                if plt and t >= plt[0]["start"]:
                     active_page = pi
 
             plt = page_line_timings[active_page]
@@ -364,8 +373,8 @@ class CustomCardStyle(CardStylePlugin):
             mask_start = bp_positions[0]["y_top"] if bp_positions else 0
             bottom = mask_start
             for lt_d in plt:
-                if t_body >= lt_d["start"]:
-                    elapsed = t_body - lt_d["start"]
+                if t >= lt_d["start"]:
+                    elapsed = t - lt_d["start"]
                     progress = min(1.0, elapsed / self.SCROLL_TIME)
                     eased = 1 - (1 - progress) ** 3
                     line_bottom = lt_d["y_top"] + (lt_d["y_bottom"] - lt_d["y_top"]) * eased

@@ -117,9 +117,40 @@ class PipelineOrchestrator:
         )
         title_duration: float = audio_durs[0] if audio_durs else 0.0
 
+        # Reconcile word count: TTS tokenisation may differ from str.split().
+        # Trim whichever side is longer so TimingEngine gets a valid input.
+        total_line_words = sum(ld.word_count for ld in line_definitions)
+        word_ts_trimmed = word_ts
+        line_defs_trimmed = line_definitions
+        if total_line_words != len(word_ts):
+            if total_line_words < len(word_ts):
+                # More TTS words than text words — trim the tail of word_ts.
+                word_ts_trimmed = word_ts[:total_line_words]
+            else:
+                # More text words than TTS words — trim line_defs from the tail.
+                available = len(word_ts)
+                trimmed: list = []
+                for ld in line_definitions:
+                    if available <= 0:
+                        break
+                    if ld.word_count <= available:
+                        trimmed.append(ld)
+                        available -= ld.word_count
+                    else:
+                        from video_creation.render.timing.models import LineDefinition
+                        trimmed.append(LineDefinition(
+                            text=" ".join(ld.text.split()[:available]),
+                            word_count=available,
+                            y_top=ld.y_top,
+                            y_bottom=ld.y_bottom,
+                            page_index=ld.page_index,
+                        ))
+                        available = 0
+                line_defs_trimmed = tuple(trimmed)
+
         timing_result = self.timing.compute(
-            words=word_ts,
-            line_definitions=line_definitions,
+            words=word_ts_trimmed,
+            line_definitions=line_defs_trimmed,
             chunk_size=chunk_size,
             audio_speed=self.config.audio_speed,
             title_duration=title_duration,

@@ -69,7 +69,7 @@ class RedditKaraokeStyle(CardStylePlugin):
 
     # Header vertical positions (fraction of canvas height).
     HEADER_Y_START: float = 0.12   # starting y (fraction)
-    HEADER_Y_END: float = 0.11
+    HEADER_Y_END: float = 0.10
 
     # Pop-in animation duration (seconds).
     POP_DUR: float = 0.25

@@ -123,7 +123,10 @@ class RenderContext:
         title: str = reddit_obj.get("thread_title", "")
 
         # Body text: prefer story-mode post body; fall back to first comment.
-        thread_post: str = reddit_obj.get("thread_post", "") or ""
+        thread_post = reddit_obj.get("thread_post", "") or ""
+        # thread_post may be a list (storymodemethod=1) or a string
+        if isinstance(thread_post, list):
+            thread_post = " ".join(str(s) for s in thread_post)
         if thread_post.strip():
             body_text = thread_post
         else:

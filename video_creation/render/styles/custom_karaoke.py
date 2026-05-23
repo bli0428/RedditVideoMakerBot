@@ -71,7 +71,7 @@ class CustomKaraokeStyle(CardStylePlugin):
     # ── Layout constants (class-level, Req 11.1, 11.2) ───────────────────
     CARD_WIDTH_PCT: float = 0.85       # header display width as fraction of W
     HEADER_Y_START: float = 0.12       # header top Y as fraction of H (at t=0)
-    HEADER_Y_END: float = 0.11
+    HEADER_Y_END: float = 0.10
     POP_DUR: float = 0.25              # seconds for the pop-in phase
     ZOOM_AMOUNT: float = 0.0   # no zoom after pop-in
     HEADER_DISMISS_DUR: float = 0.4    # seconds to fade header out once body starts

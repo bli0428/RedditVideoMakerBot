@@ -85,7 +85,7 @@ class RedditCardStyle(CardStylePlugin):
     HEADER_Y_START_FRAC: float = 0.12
 
     #: Vertical end position of the header after drift (fraction of canvas height).
-    HEADER_Y_END_FRAC: float = 0.11
+    HEADER_Y_END_FRAC: float = 0.10
 
     #: Vertical position of the body card (fraction of canvas height).
     BODY_Y_FRAC: float = 0.55
@@ -371,22 +371,27 @@ class RedditCardStyle(CardStylePlugin):
         page_imgs = list(body.pages)
 
         page_line_timings: List[List[dict]] = [[] for _ in page_imgs]
-        for lt in line_timings:
-            pi = lt.page_index
-            if pi < len(page_line_timings):
+        lt_list2 = list(line_timings)
+        lt_idx2 = 0
+        for pi, page_positions in enumerate(page_line_positions):
+            for pos in page_positions:
+                if lt_idx2 >= len(lt_list2):
+                    break
+                lt = lt_list2[lt_idx2]
                 page_line_timings[pi].append({
                     "text":    lt.text,
-                    "y_top":   lt.y_top,
-                    "y_bottom": lt.y_bottom,
+                    "y_top":   pos["y_top"],
+                    "y_bottom": pos["y_bottom"],
                     "start":   lt.start,
                     "end":     lt.end,
                 })
+                lt_idx2 += 1
 
         def _get_active_page_and_mask(t_body: float) -> Tuple[int, int, int]:
             """Return (page_index, mask_bottom, mask_start) for body time t_body."""
             active_page = 0
             for pi, plt in enumerate(page_line_timings):
-                if plt and t_body >= plt[0]["start"]:
+                if plt and t >= plt[0]["start"]:
                     active_page = pi
 
             plt = page_line_timings[active_page]
@@ -398,8 +403,8 @@ class RedditCardStyle(CardStylePlugin):
             mask_start = bp_positions[0]["y_top"] if bp_positions else 0
             bottom = mask_start
             for lt_d in plt:
-                if t_body >= lt_d["start"]:
-                    elapsed  = t_body - lt_d["start"]
+                if t >= lt_d["start"]:
+                    elapsed  = t - lt_d["start"]
                     progress = min(1.0, elapsed / self.SCROLL_TIME)
                     eased    = 1 - (1 - progress) ** 3
                     line_bottom = lt_d["y_top"] + (lt_d["y_bottom"] - lt_d["y_top"]) * eased

@@ -135,6 +135,14 @@ class OutputWriter:
         watermark_clip = self._build_watermark(total_duration, H)
 
         # ── 3. Composite final video ──────────────────────────────────────
+        # Add pop SFX at t=0 if available
+        from os.path import exists as _exists
+        from moviepy import CompositeAudioClip as _CAC
+        pop_sfx_path = "assets/sfx/pop.wav"
+        if _exists(pop_sfx_path):
+            pop_sfx = AudioFileClip(pop_sfx_path).with_start(0).with_volume_scaled(0.25)
+            audio = _CAC([audio, pop_sfx])
+
         final_video = CompositeVideoClip(
             [background, overlay, watermark_clip],
             size=(W, H),

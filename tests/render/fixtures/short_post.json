@@ -1,7 +1,7 @@
 {
   "thread_id": "test123",
-  "thread_title": "Test post title",
-  "thread_post": "This is a short test post body.",
+  "thread_title": "Test post title for preview",
+  "thread_post": "This is the first sentence of the body text. It has enough words to wrap across multiple lines when rendered at the card width. Here is a second sentence to add more content. And a third sentence to ensure we get at least two pages of body text in the card view.",
   "author": "testuser",
   "avatar_url": "",
   "thread_score": 100,
