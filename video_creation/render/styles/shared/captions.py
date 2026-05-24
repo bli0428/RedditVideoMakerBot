@@ -17,7 +17,7 @@ from video_creation.render.styles.shared.text import _strip_emojis
 # Caption style constants (match final_video.py defaults)
 # ---------------------------------------------------------------------------
 
-CAPTION_FONT_SIZE    = 100
+CAPTION_FONT_SIZE    = 88
 CAPTION_COLOR        = "white"
 CAPTION_STROKE_COLOR = "black"
 CAPTION_STROKE_WIDTH = 12

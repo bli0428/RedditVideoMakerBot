@@ -250,43 +250,18 @@ class CustomKaraokeStyle(CardStylePlugin):
 
         # ── Karaoke body: one chunk at a time, centred on screen ──────────
         if t >= title_duration and line_timings:
-            t_body = t - title_duration
             line_timings_list = list(line_timings)
 
-            # Find the active chunk: last one whose start <= t_body.
+            # Find the active chunk: last one whose absolute start <= t.
             active_idx: int | None = None
             for li, lt in enumerate(line_timings_list):
-                if t_body >= lt.start:
+                if t >= lt.start:
                     active_idx = li
 
             if active_idx is not None and active_idx < len(body.chunk_images):
                 lt = line_timings_list[active_idx]
                 k_arr = body.chunk_images[active_idx].copy()
                 kh, kw = k_arr.shape[:2]
-
-                # Pop-in: scale 80%→100% over POP_DUR from chunk start.
-                elapsed = t_body - lt.start
-                if elapsed < self.POP_DUR:
-                    pop_p = elapsed / self.POP_DUR
-                    pop_s = 0.8 + 0.2 * (1 - (1 - pop_p) ** 4)
-                    nw = max(1, int(kw * pop_s))
-                    nh = max(1, int(kh * pop_s))
-                    k_pil = Image.fromarray(k_arr).resize((nw, nh), Image.LANCZOS)
-                    k_arr = np.array(k_pil)
-                    kh, kw = nh, nw
-
-                # Fade-out: last FADE_OUT_DUR seconds before next chunk (or end).
-                if active_idx + 1 < len(line_timings_list):
-                    next_start = line_timings_list[active_idx + 1].start
-                    time_left = next_start - t_body
-                else:
-                    time_left = lt.end - t_body
-                if 0 <= time_left < self.FADE_OUT_DUR:
-                    alpha_scale = time_left / self.FADE_OUT_DUR
-                    k_arr = k_arr.copy()
-                    k_arr[:, :, 3] = (
-                        k_arr[:, :, 3].astype(np.float32) * alpha_scale
-                    ).astype(np.uint8)
 
                 # Centre horizontally, place at KARAOKE_Y_PCT down the screen.
                 bx = max(0, (W - kw) // 2)
