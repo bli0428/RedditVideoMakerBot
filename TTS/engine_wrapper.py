@@ -91,17 +91,35 @@ class TTSEngine:
             from utils.gender_detect import pick_voice
             from utils.console import print_substep
 
-            # Combine title + body for detection
-            detect_text = self.reddit_object["thread_title"] + " "
-            post = self.reddit_object.get("thread_post", "")
-            if isinstance(post, list):
-                detect_text += " ".join(post)
-            elif isinstance(post, str):
-                detect_text += post
+            # Use author_gender set by Translation_Service if available,
+            # otherwise fall back to local regex detection.
+            author_gender = self.reddit_object.get("author_gender")
+            if author_gender in ("male", "female", "unknown"):
+                from utils import settings as _settings
+                import random
+                male_raw = _settings.config["settings"]["tts"].get("elevenlabs_male_voice_ids", "")
+                female_raw = _settings.config["settings"]["tts"].get("elevenlabs_female_voice_ids", "")
+                male_ids = [v.strip() for v in male_raw.split(",") if v.strip()]
+                female_ids = [v.strip() for v in female_raw.split(",") if v.strip()]
+                if author_gender == "female" and female_ids:
+                    chosen_voice = random.choice(female_ids)
+                elif author_gender == "male" and male_ids:
+                    chosen_voice = random.choice(male_ids)
+                else:
+                    all_ids = male_ids + female_ids
+                    chosen_voice = random.choice(all_ids) if all_ids else ""
+            else:
+                # Fallback: local regex detection on raw text
+                detect_text = self.reddit_object["thread_title"] + " "
+                post = self.reddit_object.get("thread_post", "")
+                if isinstance(post, list):
+                    detect_text += " ".join(post)
+                elif isinstance(post, str):
+                    detect_text += post
+                chosen_voice = pick_voice(detect_text)
 
-            chosen_voice = pick_voice(detect_text)
             settings.config["settings"]["tts"]["elevenlabs_voice_name"] = chosen_voice
-            print_substep(f"Auto-detected voice ID: {chosen_voice}", style="bold blue")
+            print_substep(f"Auto-detected voice ID: {chosen_voice} (gender={author_gender})", style="bold blue")
 
         self.add_periods()
         self.call_tts("title", expand_for_tts(process_text(self.reddit_object["thread_title"])))
@@ -113,10 +131,10 @@ class TTSEngine:
                 if len(self.reddit_object["thread_post"]) > self.tts_module.max_chars:
                     self.split_post(self.reddit_object["thread_post"], "postaudio")
                 else:
-                    self.call_tts("postaudio", process_text(self.reddit_object["thread_post"]))
+                    self.call_tts("postaudio", expand_for_tts(process_text(self.reddit_object["thread_post"])))
             elif settings.config["settings"]["storymodemethod"] == 1:
                 for idx, text in track(enumerate(self.reddit_object["thread_post"])):
-                    self.call_tts(f"postaudio-{idx}", process_text(text))
+                    self.call_tts(f"postaudio-{idx}", expand_for_tts(process_text(text)))
 
         else:
             for idx, comment in track(enumerate(self.reddit_object["comments"]), "Saving..."):
@@ -146,7 +164,7 @@ class TTSEngine:
         self.create_silence_mp3()
 
         for idy, text_cut in enumerate(split_text):
-            newtext = process_text(text_cut)
+            newtext = expand_for_tts(process_text(text_cut))
             # print(f"{idx}-{idy}: {newtext}\n")
 
             if not newtext or newtext.isspace():

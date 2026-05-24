@@ -19,6 +19,26 @@ Your job:
 - If the excerpt is too short or ambiguous to detect, reply 'und'.
 """
 
+SYSTEM_PROMPT_METADATA = """You are a metadata extractor for Reddit posts.
+
+The user will send you a Reddit post (title + body). Your job is to extract
+two pieces of information about the original poster (OP):
+
+1. language: The dominant language of the post. Use BCP-47 / ISO 639-1 codes
+   (e.g. 'en', 'es', 'pt-BR'). Use 'und' if ambiguous.
+
+2. author_gender: The likely gender of the OP based on explicit self-identification
+   in the text. Look for:
+   - Age/gender tags like (21F), [30M], 25f, 21m
+   - Phrases like "I'm a woman", "I am female", "as a man", "I'm a 25-year-old guy"
+   - Role words: "I'm a mom/dad/wife/husband/girlfriend/boyfriend"
+   - Indirect signals: "my husband" (implies female OP), "my wife" (implies male OP)
+   Use "female", "male", or "unknown" if there is no clear signal.
+
+Reply with ONLY a JSON object on a single line, no markdown, no explanation:
+{"language": "<tag>", "author_gender": "<female|male|unknown>"}
+"""
+
 SYSTEM_PROMPT_TRANSLATE = """You translate Reddit posts and comments.
 
 Rules:
@@ -43,6 +63,12 @@ Cultural adaptation rules:
 def user_prompt_detect(sample: str) -> str:
     """Build the user message for source-language detection."""
     return f"Detect the dominant language of the following Reddit excerpt:\n\n{sample}"
+
+
+def user_prompt_metadata(*, title: str, body: str) -> str:
+    """Build the user message for post metadata extraction."""
+    truncated_body = body[:1500] if len(body) > 1500 else body
+    return f"TITLE: {title}\n\nBODY: {truncated_body}"
 
 
 def user_prompt_translate(*, text: str, target_lang: str) -> str:

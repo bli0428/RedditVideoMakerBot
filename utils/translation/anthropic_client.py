@@ -19,8 +19,10 @@ from utils.translation.errors import (
 )
 from utils.translation.prompts import (
     SYSTEM_PROMPT_DETECT,
+    SYSTEM_PROMPT_METADATA,
     SYSTEM_PROMPT_TRANSLATE,
     user_prompt_detect,
+    user_prompt_metadata,
     user_prompt_translate,
 )
 
@@ -98,6 +100,51 @@ class Anthropic_Client:
             user=user_prompt_detect(sample),
         )
         return response.strip().lower()
+
+    def detect_post_metadata(self, *, title: str, body: str) -> dict:
+        """Detect language and author gender from a Reddit post in one call.
+
+        Args:
+            title: The post title.
+            body: The post body (selftext). May be empty for comment-mode posts.
+
+        Returns:
+            Dict with keys:
+                "language"      — BCP-47 tag string, e.g. "en", "fr", "und"
+                "author_gender" — "female", "male", or "unknown"
+            Falls back to {"language": "und", "author_gender": "unknown"} on
+            any parse error so callers never need to handle exceptions.
+        """
+        import json as _json
+
+        _FALLBACK = {"language": "und", "author_gender": "unknown"}
+
+        try:
+            response = self._call(
+                system=SYSTEM_PROMPT_METADATA,
+                user=user_prompt_metadata(title=title, body=body),
+            )
+        except Exception:
+            return _FALLBACK
+
+        # Strip any accidental markdown fences
+        raw = response.strip().strip("`")
+        # Find the JSON object in the response (model may add extra text)
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1 or end == 0:
+            return _FALLBACK
+
+        try:
+            data = _json.loads(raw[start:end])
+        except _json.JSONDecodeError:
+            return _FALLBACK
+
+        language = str(data.get("language", "und")).strip().lower() or "und"
+        gender_raw = str(data.get("author_gender", "unknown")).strip().lower()
+        author_gender = gender_raw if gender_raw in ("female", "male") else "unknown"
+
+        return {"language": language, "author_gender": author_gender}
 
     def translate(self, text: str, target_lang: str) -> str:
         """Translate text into target_lang. One Anthropic call per call.

@@ -159,21 +159,34 @@ class Translation_Service:
         # Extract thread_id for cache keying (Req 7.1)
         thread_id = str(reddit_content.get("thread_id", ""))
 
-        # Source-language detection (Req 5.1, 5.3)
+        # Metadata detection: language + author gender in one call (Req 5.1, 5.3)
+        title = reddit_content.get("thread_title", "") or ""
+        body = reddit_content.get("thread_post", "") or ""
+        if isinstance(body, list):
+            body = " ".join(body)
+
+        try:
+            metadata = self._client.detect_post_metadata(title=title, body=body)
+        except TranslationError as e:
+            return self._apply_top_level_failure_policy(
+                reddit_content, field="<detect>", error=e
+            )
+
+        src = metadata.get("language", "und")
+        author_gender = metadata.get("author_gender", "unknown")
+        print_substep(
+            f"[translation] detected language={src!r} author_gender={author_gender!r}"
+        )
+
         if not self.config.force_translate:
-            sample = self._build_detection_sample(reddit_content)
-            try:
-                src = self._client.detect_source_language(sample)
-            except TranslationError as e:
-                return self._apply_top_level_failure_policy(
-                    reddit_content, field="<detect>", error=e
-                )
             if self._lang_matches(src, self.config.target_lang):
                 print_substep(
                     f"[translation] Source language ({src!r}) matches target "
                     f"({self.config.target_lang!r}); skipping translation."
                 )
-                return reddit_content
+                out = dict(reddit_content)
+                out["author_gender"] = author_gender
+                return out
 
         # Translate each Translatable_Field (Req 4.1–4.4)
         out = dict(reddit_content)
@@ -209,6 +222,8 @@ class Translation_Service:
             }
             for i, c in enumerate(reddit_content.get("comments", []))
         ]
+
+        out["author_gender"] = author_gender
 
         # End-of-run summary (Req 13.4)
         print_substep(
