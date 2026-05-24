@@ -3,6 +3,23 @@ import re
 from pathlib import Path
 from typing import Tuple
 
+# Abbreviations to expand for TTS only — visual text is left unchanged.
+_TTS_EXPANSIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'\bAITA\b', re.IGNORECASE), 'Am I the Asshole'),
+    (re.compile(r'\bNTA\b',  re.IGNORECASE), 'Not the Asshole'),
+    (re.compile(r'\bYTA\b',  re.IGNORECASE), "You're the Asshole"),
+    (re.compile(r'\bESH\b',  re.IGNORECASE), 'Everyone Sucks Here'),
+    (re.compile(r'\bNAH\b',  re.IGNORECASE), 'No Assholes Here'),
+    (re.compile(r'\bINFO\b', re.IGNORECASE), 'I Need More Info'),
+]
+
+
+def expand_for_tts(text: str) -> str:
+    """Expand Reddit abbreviations so TTS reads them naturally."""
+    for pattern, replacement in _TTS_EXPANSIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
 import numpy as np
 from moviepy import AudioFileClip
 from moviepy.audio.AudioClip import AudioClip
@@ -87,7 +104,7 @@ class TTSEngine:
             print_substep(f"Auto-detected voice ID: {chosen_voice}", style="bold blue")
 
         self.add_periods()
-        self.call_tts("title", process_text(self.reddit_object["thread_title"]))
+        self.call_tts("title", expand_for_tts(process_text(self.reddit_object["thread_title"])))
         # processed_text = ##self.reddit_object["thread_post"] != ""
         idx = 0
 

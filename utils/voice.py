@@ -68,7 +68,7 @@ def sleep_until(time) -> None:
 def sanitize_text(text: str) -> str:
     r"""Sanitizes the text for tts.
         What gets removed:
-     - following characters`^_~@!&;#:-%“”‘"%*/{}[]()\|<>?=+`
+     - following characters`^_~@!&#-%“”‘"%*/{}[]()\|<>?=+`
      - any http or https links
 
     Args:
@@ -83,8 +83,8 @@ def sanitize_text(text: str) -> str:
 
     result = re.sub(regex_urls, " ", text)
 
-    # note: not removing apostrophes
-    regex_expr = r"\s['|’]|['|’]\s|[\^_~@!&;#:\-%—“”‘\"%\*/{}\[\]\(\)\\|<>=+]"
+    # note: not removing apostrophes, colons, or semicolons (they aid TTS prosody)
+    regex_expr = r"\s['|’]|['|’]\s|[\^_~@!&#\-%—“”‘\"%\*/{}\[\]\(\)\\|<>=+]"
     result = result.replace("%", " percent")
     result = re.sub(regex_expr, " ", result)
     result = result.replace("+", "plus").replace("&", "and")

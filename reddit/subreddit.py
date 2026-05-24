@@ -34,6 +34,7 @@ class _RedditPost:
         self.is_self: bool = data.get("is_self", True)
         self.author: str | None = data.get("author")
         self.link_flair_text: str | None = data.get("link_flair_text")
+        self.subreddit: str = data.get("subreddit", "") or ""
 
     def __str__(self) -> str:
         """Return the post ID — matches praw.models.Submission.__str__."""
@@ -98,6 +99,11 @@ def _fetch_comments(post_id: str) -> list[_RedditComment]:
             continue
         comments.append(_RedditComment(child["data"]))
     return comments
+
+
+def _first_configured_subreddit() -> str:
+    """Return the first subreddit name from the configured query, lowercased and stripped of any r/ prefix."""
+    return settings.config["reddit"]["thread"]["subreddit"].split("+")[0].lstrip("r/").strip().lower()
 
 
 def get_subreddit_threads(POST_ID: str):
@@ -179,6 +185,7 @@ def get_subreddit_threads(POST_ID: str):
     content["is_nsfw"] = submission.over_18
     content["author"] = submission.author or "Anonymous"
     content["avatar_url"] = _fetch_avatar(submission.author)
+    content["subreddit_name"] = (submission.subreddit or _first_configured_subreddit()).lower()
     content["comments"] = []
     if settings.config["settings"]["storymode"]:
         content["thread_post"] = submission.selftext

@@ -17,12 +17,28 @@ Key-preservation guarantee (Req 6.4):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from utils.console import print_substep
 from utils.translation.config import TranslationConfig
 from utils.translation.errors import TranslationConfigError, TranslationError
+
+# ---------------------------------------------------------------------------
+# Post-translation abbreviation fix table
+# ---------------------------------------------------------------------------
+# Maps source-language abbreviations that the LLM may leave untranslated to
+# their English equivalents.  Applied deterministically after translation on
+# thread_title (full string) and the last sentence of thread_post.
+#
+# Keys are compiled as whole-word, case-insensitive patterns.
+# Add new entries here as needed.
+# ---------------------------------------------------------------------------
+_ABBREV_FIXES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'\bSTB\b', re.IGNORECASE), 'AITA'),
+    (re.compile(r'\bJNSP\b', re.IGNORECASE), 'IDK'),
+]
 
 
 @dataclass
@@ -168,6 +184,7 @@ class Translation_Service:
             thread_id=thread_id,
             stats=stats,
         )
+        out["thread_title"] = self._apply_abbreviation_fixes(out["thread_title"])
 
         if isinstance(reddit_content.get("thread_post"), str):
             out["thread_post"] = self._translate_field(
@@ -175,6 +192,9 @@ class Translation_Service:
                 reddit_content["thread_post"],
                 thread_id=thread_id,
                 stats=stats,
+            )
+            out["thread_post"] = self._apply_abbreviation_fixes(
+                out["thread_post"], last_sentence_only=True
             )
 
         out["comments"] = [
@@ -382,6 +402,39 @@ class Translation_Service:
         Comparison is case-insensitive.
         """
         return src.lower() == target.lower()
+
+    @staticmethod
+    def _apply_abbreviation_fixes(text: str, *, last_sentence_only: bool = False) -> str:
+        """Replace known untranslated abbreviations with their English equivalents.
+
+        When *last_sentence_only* is True, only the final sentence of *text* is
+        processed; the rest is returned unchanged.  This is used for
+        ``thread_post`` where only the closing verdict line matters.
+
+        The fix table is ``_ABBREV_FIXES`` at module level — add entries there.
+        """
+        if not text:
+            return text
+
+        if last_sentence_only:
+            # Find the last sentence boundary: a sentence-ending char (. ! ?)
+            # followed by whitespace and a non-whitespace char.  We want the
+            # *last* such boundary so we iterate all matches.
+            boundaries = list(re.finditer(r'(?<=[.!?])\s+(?=\S)', text))
+            if boundaries:
+                last = boundaries[-1]
+                prefix = text[:last.end()]   # everything up to and including the whitespace
+                sentence = text[last.end():]  # the final sentence
+                fixed = sentence
+                for pattern, replacement in _ABBREV_FIXES:
+                    fixed = pattern.sub(replacement, fixed)
+                return prefix + fixed
+            # No sentence boundary — fix the whole string
+
+        result = text
+        for pattern, replacement in _ABBREV_FIXES:
+            result = pattern.sub(replacement, result)
+        return result
 
     def _sanitize_or_fallback(
         self, field_name: str, translated: str, original: str

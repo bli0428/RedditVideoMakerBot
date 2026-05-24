@@ -11,12 +11,13 @@ import sys
 from os.path import exists
 from pathlib import Path
 
-from reddit.subreddit import _fetch_top, _fetch_submission, _RedditPost
+from reddit.subreddit import _fetch_top, _fetch_submission, _RedditPost, _first_configured_subreddit
 from utils import settings
 from utils.cleanup import cleanup
 from utils.console import print_markdown, print_step, print_substep
 from utils.ffmpeg_install import ffmpeg_install
 from utils.id import extract_id
+from utils.story_splitter.config import from_settings as _splitting_config_from_settings
 from utils.subreddit import _contains_blocked_words, already_done
 from utils.translation import Translation_Service, TranslationConfig
 from utils.voice import sanitize_text
@@ -58,8 +59,15 @@ def is_valid_post(post: _RedditPost, done_ids: set) -> bool:
         return False
     if len(post.selftext) < 200:
         return False
-    max_len = settings.config["settings"].get("storymode_max_length", 1000)
-    if len(post.selftext) > max_len:
+    cfg = _splitting_config_from_settings(
+        settings.config,
+        subreddit_name=(getattr(post, "subreddit", "") or "").lower(),
+    )
+    if cfg.mode == "cutoff":
+        ceiling = cfg.hard_max_length
+    else:
+        ceiling = cfg.max_parts * cfg.hard_max_length
+    if len(post.selftext) > ceiling:
         return False
     if _contains_blocked_words(post.title + " " + post.selftext):
         return False
@@ -119,6 +127,7 @@ def build_reddit_object(submission: _RedditPost) -> dict:
         "is_nsfw": submission.over_18,
         "author": submission.author or "Anonymous",
         "avatar_url": _fetch_avatar(submission.author),
+        "subreddit_name": (getattr(submission, "subreddit", "") or _first_configured_subreddit()).lower(),
         "comments": [],
     }
 

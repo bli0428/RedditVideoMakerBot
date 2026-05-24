@@ -8,6 +8,7 @@ Satisfies: Requirements 3.3, 6.1, 6.2, 7.4
 from __future__ import annotations
 
 import math
+import re
 from typing import TYPE_CHECKING
 
 from video_creation.render.timing.models import (
@@ -16,6 +17,33 @@ from video_creation.render.timing.models import (
     TimingResult,
     WordTimestamp,
 )
+
+
+_PUNCT_BREAK = re.compile(r'[,\.!?;:]$')
+
+
+def _split_words_on_punctuation(words: list[str]) -> list[list[str]]:
+    """Split a flat list of words into sub-groups at punctuation boundaries.
+
+    A word that ends with ``,``, ``.``, ``!``, ``?``, ``;``, or ``:`` closes
+    the current sub-group.  For example::
+
+        ["Hi,", "my", "name"] → [["Hi,"], ["my", "name"]]
+
+    An empty input returns an empty list.
+    """
+    if not words:
+        return []
+    groups: list[list[str]] = []
+    current: list[str] = []
+    for word in words:
+        current.append(word)
+        if _PUNCT_BREAK.search(word):
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+    return groups
 
 
 class TimingEngine:
@@ -111,37 +139,50 @@ class TimingEngine:
                 )
                 word_idx += n
             else:
-                # Chunked — ceil(n / chunk_size) entries per LineDefinition.
+                # Chunked — ceil(n / chunk_size) entries per LineDefinition,
+                # then further split each chunk at punctuation boundaries so
+                # that e.g. "Hi, my name" becomes ["Hi,"] and ["my", "name"].
                 num_chunks = math.ceil(n / chunk_size) if n > 0 else 1
-                for chunk_index in range(num_chunks):
-                    chunk_start_word = chunk_index * chunk_size
+                chunk_index = 0
+                for raw_chunk_idx in range(num_chunks):
+                    chunk_start_word = raw_chunk_idx * chunk_size
                     chunk_end_word = min(chunk_start_word + chunk_size, n)
-                    cw_n = chunk_end_word - chunk_start_word
+                    raw_chunk_words = line_words[chunk_start_word:chunk_end_word]
 
-                    chunk_text_words = line_words[chunk_start_word:chunk_end_word]
-                    chunk_text = " ".join(chunk_text_words)
+                    # Further split on punctuation within this raw chunk.
+                    sub_groups = _split_words_on_punctuation(raw_chunk_words)
+                    if not sub_groups:
+                        sub_groups = [[]]  # preserve zero-word chunk behaviour
 
-                    if cw_n > 0:
-                        start = words[word_idx].start
-                        end = words[word_idx + cw_n - 1].end
-                    else:
-                        prev_end = entries[-1].end if entries else 0.0
-                        start = prev_end
-                        end = prev_end
+                    sub_word_idx = word_idx
+                    for sub_words in sub_groups:
+                        cw_n = len(sub_words)
+                        chunk_text = " ".join(sub_words)
 
-                    entries.append(
-                        LineTiming(
-                            text=chunk_text,
-                            start=start,
-                            end=end,
-                            line_index=line_index,
-                            chunk_index=chunk_index,
-                            y_top=ld.y_top,
-                            y_bottom=ld.y_bottom,
-                            page_index=ld.page_index,
+                        if cw_n > 0:
+                            start = words[sub_word_idx].start
+                            end = words[sub_word_idx + cw_n - 1].end
+                        else:
+                            prev_end = entries[-1].end if entries else 0.0
+                            start = prev_end
+                            end = prev_end
+
+                        entries.append(
+                            LineTiming(
+                                text=chunk_text,
+                                start=start,
+                                end=end,
+                                line_index=line_index,
+                                chunk_index=chunk_index,
+                                y_top=ld.y_top,
+                                y_bottom=ld.y_bottom,
+                                page_index=ld.page_index,
+                            )
                         )
-                    )
-                    word_idx += cw_n
+                        sub_word_idx += cw_n
+                        chunk_index += 1
+
+                    word_idx += len(raw_chunk_words)
 
         # ── Compute total_duration ────────────────────────────────────────
         if words:

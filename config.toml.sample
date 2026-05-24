@@ -1,0 +1,118 @@
+[ai]
+ai_similarity_enabled = false
+ai_similarity_keywords = ""
+
+[settings]
+allow_nsfw = false
+times_to_run = 1
+opacity = 1.0
+storymode = true
+storymodemethod = 1
+storymode_max_length = 1000
+resolution_w = 1080
+resolution_h = 1920
+zoom = 1.0
+channel_name = "Sample Channel Name"
+style = "reddit-karaoke"
+theme = "dark"
+
+[translation]
+provider = "anthropic"
+target_lang = "en"
+failure_policy = "skip"
+cache_enabled = true
+force_translate = false
+
+[settings.background]
+background_video = "custom"
+background_audio = "lofi"
+background_audio_volume = 0.15
+enable_extra_audio = false
+background_thumbnail = false
+background_thumbnail_font_family = "arial"
+background_thumbnail_font_size = 96
+background_thumbnail_font_color = "255,255,255"
+
+[settings.tts]
+voice_choice = "elevenlabs"
+random_voice = false
+elevenlabs_male_voice_ids = ""
+elevenlabs_female_voice_ids = ""
+elevenlabs_api_key = ""
+aws_polly_voice = "Matthew"
+streamlabs_polly_voice = "Matthew"
+tiktok_voice = "en_us_001"
+tiktok_sessionid = ""
+python_voice = "1"
+py_voice_num = "2"
+silence_duration = 0.3
+no_emojis = false
+openai_api_url = "https://api.openai.com/v1/"
+openai_api_key = ""
+openai_voice_name = "alloy"
+openai_model = "tts-1"
+
+[translation.anthropic]
+model = "claude-haiku-4-5-20251001"
+max_output_tokens = 4096
+api_key = ""
+
+[reddit.creds]
+client_id = ""
+client_secret = ""
+username = ""
+password = ""
+2fa = false
+
+[reddit.thread]
+random = false
+subreddit = ""
+post_id = ""
+max_comment_length = 500
+min_comment_length = 1
+post_lang = ""
+min_comments = 20
+blocked_words = ""
+required_flair = ""
+
+[settings.style_options.custom-card]
+theme = "light"
+dismiss_title_on_body = false
+
+[settings.style_options.custom-karaoke]
+theme = "light"
+karaoke_words_per_chunk = 3
+
+[settings.style_options.reddit-card]
+theme = "light"
+dismiss_title_on_body = false
+
+[settings.style_options.reddit-karaoke]
+theme = "light"
+karaoke_words_per_chunk = 3
+dismiss_title_on_body = true
+
+[splitting]
+default_mode = "cutoff"
+soft_max_length = 1000
+single_part_tolerance = 1.5
+min_part_length = 300
+max_parts = 5
+
+[splitting.templates]
+title_first_part = "{title} (Part {part_number}/{total_parts})"
+title_other_part = "{title} (Part {part_number}/{total_parts})"
+body_prefix_other_part = "Part {part_number}: "
+body_suffix_non_final_part = "\n\nFollow for part {next_part_number}!"
+
+# Per-subreddit overrides: add a [splitting.subreddits.<name>] table to change
+# the splitting mode for a specific subreddit. The key is matched
+# case-insensitively against the resolved subreddit name.
+#
+# Example: enable multi-part splitting for r/relationships
+# [splitting.subreddits.relationships]
+# mode = "split"
+#
+# Example: keep cutoff behavior for r/whowouldwin
+# [splitting.subreddits.whowouldwin]
+# mode = "cutoff"

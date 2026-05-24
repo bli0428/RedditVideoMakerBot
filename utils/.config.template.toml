@@ -75,3 +75,36 @@ force_translate = { optional = true, type = "bool", default = false, options = [
 model = { optional = true, default = "claude-3-5-sonnet-latest", explanation = "Claude model identifier passed with each request." }
 max_output_tokens = { optional = true, type = "int", default = 4096, nmin = 1, explanation = "Maximum output tokens per Anthropic request." }
 api_key = { optional = true, default = "", explanation = "Anthropic API key. The ANTHROPIC_API_KEY environment variable takes precedence over this value." }
+
+[splitting]
+default_mode = { optional = true, type = "str", default = "cutoff", options = ["cutoff", "split"], explanation = "Default splitting policy for subreddits that have no per-subreddit override. 'cutoff' preserves the existing behavior: posts longer than Hard_Max_Length are rejected at scrape time and Story_Splitter always returns a single-part plan. 'split' enables multi-part video production: posts up to Max_Parts × Hard_Max_Length are accepted and split into sequential parts.", example = "split" }
+soft_max_length = { optional = true, type = "int", default = 1000, nmin = 1, explanation = "Target maximum character count for a single story part. When [splitting] soft_max_length is absent, the value of [settings] storymode_max_length is used as a fallback; when both are absent the default 1000 applies. Hard_Max_Length = floor(soft_max_length × single_part_tolerance) is the absolute ceiling per part.", example = 1200, oob_error = "soft_max_length must be at least 1" }
+single_part_tolerance = { optional = true, type = "float", default = 1.5, nmin = 1.0, explanation = "Multiplier applied to soft_max_length to compute Hard_Max_Length. A story whose length is at most Hard_Max_Length stays as a single part even if it exceeds soft_max_length, avoiding awkward tiny-tail splits. Must be >= 1.0; values below 1.0 are clamped to 1.0 with a warning.", example = 1.5, oob_error = "single_part_tolerance must be >= 1.0" }
+min_part_length = { optional = true, type = "int", default = 300, nmin = 1, explanation = "Minimum character count for any part in a multi-part Split_Plan. When the natural tail of a split would fall below this floor, the splitter moves the previous boundary earlier or merges the tail into the preceding part. Does not apply when the entire post is shorter than min_part_length (single-part case).", example = 200, oob_error = "min_part_length must be at least 1" }
+max_parts = { optional = true, type = "int", default = 5, nmin = 1, explanation = "Maximum number of parts a Split_Plan may contain. Posts that would require more than max_parts parts are skipped with a StorySplitError rather than producing an excessively long series.", example = 3, oob_error = "max_parts must be at least 1" }
+
+[splitting.templates]
+title_first_part = { optional = true, type = "str", default = "{title} (Part {part_number}/{total_parts})", explanation = "Template for the video title of the first part of a multi-part story. Supported placeholders: {title} (original post title), {part_number} (1-indexed part number), {total_parts} (total number of parts), {next_part_number} (part_number + 1), {prev_part_number} (part_number - 1). Unknown placeholders are left literal with a warning. Not applied in the single-part case.", example = "{title} — Part {part_number} of {total_parts}" }
+title_other_part = { optional = true, type = "str", default = "{title} (Part {part_number}/{total_parts})", explanation = "Template for the video title of every part after the first. Supports the same placeholders as title_first_part. Not applied in the single-part case.", example = "{title} — Part {part_number} of {total_parts} (cont.)" }
+body_prefix_other_part = { optional = true, type = "str", default = "Part {part_number}: ", explanation = "Text prepended to the body of every part after the first (part_number > 1). Supports the same placeholders as title_first_part. Set to an empty string to disable the prefix. Not applied to part 1 or in the single-part case.", example = "Continued (Part {part_number}): " }
+body_suffix_non_final_part = { optional = true, type = "str", default = "\n\nFollow for part {next_part_number}!", explanation = "Text appended to the body of every part that is not the final part (part_number < total_parts). Supports the same placeholders as title_first_part. Set to an empty string to disable the suffix. Not applied to the last part or in the single-part case.", example = "\n\nLike and follow for part {next_part_number}!" }
+
+# [splitting.subreddits.<name>]
+# Per-subreddit override table. Replace <name> with the subreddit name (matched
+# case-insensitively). When a matching table is present, its fields take
+# precedence over the top-level [splitting] defaults for posts from that
+# subreddit. Currently the only supported override field is:
+#
+#   mode = { optional = true, type = "str", options = ["cutoff", "split"],
+#            explanation = "Override the splitting mode for this subreddit.
+#            'split' enables multi-part video production; 'cutoff' preserves
+#            the existing filter-long-posts behavior.",
+#            example = "split" }
+#
+# Example — enable multi-part splitting for r/relationships:
+#   [splitting.subreddits.relationships]
+#   mode = "split"
+#
+# Example — keep cutoff behavior for r/whowouldwin:
+#   [splitting.subreddits.whowouldwin]
+#   mode = "cutoff"

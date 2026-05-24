@@ -6,6 +6,7 @@ import requests
 from utils import settings
 from utils.ai_methods import sort_by_similarity
 from utils.console import print_substep
+from utils.story_splitter.config import from_settings as _splitting_config_from_settings
 
 _HEADERS = {
     "User-Agent": "RedditVideoMakerBot/4.0 (public JSON; no auth)",
@@ -100,12 +101,18 @@ def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similari
                 print_substep("You are trying to use story mode on post with no post text")
                 continue
             else:
-                # Check for the length of the post text
-                if len(submission.selftext) > (
-                    settings.config["settings"]["storymode_max_length"] or 2000
-                ):
+                # Check for the length of the post text using per-subreddit ceiling
+                subreddit_name = (getattr(submission, "subreddit", "") or subreddit).lower()
+                splitting_cfg = _splitting_config_from_settings(
+                    settings.config, subreddit_name=str(subreddit_name)
+                )
+                if splitting_cfg.mode == "cutoff":
+                    ceiling = splitting_cfg.hard_max_length
+                else:
+                    ceiling = splitting_cfg.max_parts * splitting_cfg.hard_max_length
+                if len(submission.selftext) > ceiling:
                     print_substep(
-                        f"Post is too long ({len(submission.selftext)}), try with a different post. ({settings.config['settings']['storymode_max_length']} character limit)"
+                        f"Post is too long ({len(submission.selftext)}), try with a different post. ({ceiling} character limit)"
                     )
                     continue
                 elif len(submission.selftext) < 200:
@@ -125,8 +132,9 @@ def get_subreddit_undone(submissions: list, subreddit, times_checked=0, similari
         "all",
     ]  # set doesn't have __getitem__
     index = times_checked + 1
-    if index == len(VALID_TIME_FILTERS):
-        print("All submissions have been done.")
+    if index >= len(VALID_TIME_FILTERS):
+        print("All submissions have been done. No new posts found in this subreddit.")
+        raise SystemExit(0)
 
     return get_subreddit_undone(
         _fetch_top(

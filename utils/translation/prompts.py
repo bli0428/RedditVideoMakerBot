@@ -31,6 +31,12 @@ Rules:
 - Do NOT translate proper nouns, usernames, or URLs.
 - Output ONLY the translated text, raw, ready to be displayed verbatim.
 - If the input is empty or whitespace-only, output the input unchanged.
+
+Cultural adaptation rules:
+- Replace French Reddit abbreviations with their American equivalents:
+  STB (Suis-je le trou de balle) → AITA (Am I the Asshole)
+  JNSP (Je ne sais pas) → IDK
+  etc.
 """
 
 

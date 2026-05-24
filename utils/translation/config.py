@@ -13,7 +13,7 @@ from utils.translation.errors import TranslationConfigError
 
 VALID_PROVIDERS = ("none", "anthropic")
 VALID_FAILURE_POLICIES = ("skip", "fail")
-DEFAULT_MODEL = "claude-3-5-sonnet-latest"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
